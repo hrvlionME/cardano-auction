@@ -1,0 +1,9 @@
+dist-newstyle/
+*.hi
+*.o
+plutus.json
+*.plutus
+.DS_Store
+*.swp
+*.swo
+*~
