@@ -55,7 +55,9 @@ library
   import:          plinth-options, plutus-deps
   hs-source-dirs:  src
   build-depends:   base
-  exposed-modules: AuctionValidator
+  exposed-modules:
+    AuctionValidator
+    LotMintingPolicy
 
 executable gen-blueprint
   import:         ghc-only-options, plutus-deps

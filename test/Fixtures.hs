@@ -16,7 +16,7 @@ import PlutusLedgerApi.V3 (Datum (..), Lovelace (..), OutputDatum (..), POSIXTim
                            PubKeyHash (..), Redeemer (..), ScriptContext (..), ScriptHash (..),
                            ScriptInfo (..), TxId (..), TxInInfo (..), TxInfo (..), TxOut (..),
                            TxOutRef (..))
-import PlutusLedgerApi.V3.MintValue (emptyMintValue)
+import PlutusLedgerApi.V3.MintValue (MintValue (..), emptyMintValue)
 import PlutusTx (ToData, toBuiltinData)
 import PlutusTx.AssocMap qualified as AssocMap
 
@@ -39,6 +39,12 @@ lotSymbol = CurrencySymbol "lotpolicy_______________________"
 lotA, lotB :: TokenName
 lotA = TokenName "LAPTOP"
 lotB = TokenName "JUNK"
+
+-- | Stands in for the hash of the minting policy script. In a real transaction
+-- the ledger derives this from the script itself; in tests we hand it to the
+-- policy through 'mintCtx'.
+lotPolicy :: CurrencySymbol
+lotPolicy = CurrencySymbol "lotpolicyhash___________________"
 
 deadline :: POSIXTime
 deadline = 1_700_000_000_000
@@ -77,6 +83,10 @@ payTo pkh v = TxOut (pubKeyAddr pkh) v NoOutputDatum Nothing
 -- output from discharging two auctions' obligations.
 payToFor :: TxOutRef -> PubKeyHash -> Value -> TxOut
 payToFor ref pkh v = TxOut (pubKeyAddr pkh) v (datumOf ref) Nothing
+
+-- | An ordinary wallet input, e.g. the seed UTxO a one-shot policy consumes.
+plainInput :: TxOutRef -> PubKeyHash -> Value -> TxInInfo
+plainInput ref pkh v = TxInInfo ref (TxOut (pubKeyAddr pkh) v NoOutputDatum Nothing)
 
 -- | A continuing output back to the auction script, carrying new state.
 continuing :: ScriptHash -> Value -> AuctionDatum -> TxOut
@@ -127,6 +137,20 @@ emptyTxInfo =
     , txInfoProposalProcedures = []
     , txInfoCurrentTreasuryAmount = Nothing
     , txInfoTreasuryDonation = Nothing
+    }
+
+-- | What a transaction mints, as the ledger presents it to a policy.
+mintOf :: CurrencySymbol -> [(TokenName, Integer)] -> MintValue
+mintOf cs toks = UnsafeMintValue (AssocMap.unsafeFromList [(cs, AssocMap.unsafeFromList toks)])
+
+-- | Build the context for a minting policy run. Minting scripts get no datum;
+-- the 'CurrencySymbol' the policy is being run for comes via 'MintingScript'.
+mintCtx :: TxInfo -> CurrencySymbol -> ScriptContext
+mintCtx txInfo cs =
+  ScriptContext
+    { scriptContextTxInfo = txInfo
+    , scriptContextRedeemer = Redeemer (toBuiltinData ())
+    , scriptContextScriptInfo = MintingScript cs
     }
 
 -- | Build the context for one script input inside a (possibly shared) tx.

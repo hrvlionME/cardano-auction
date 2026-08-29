@@ -4,9 +4,10 @@ module Main (main) where
 
 import AuctionValidator
 import Fixtures
+import LotMintingPolicy
 
 import Control.Exception (SomeException, evaluate, try)
-import PlutusLedgerApi.V3 (ScriptContext, TxInfo (..))
+import PlutusLedgerApi.V3 (ScriptContext, TxInfo (..), TxOutRef)
 import Test.Tasty
 import Test.Tasty.HUnit
 
@@ -16,12 +17,22 @@ A failing check inside the validator calls 'PlutusTx.traceError', which under
 GHC throws rather than returning 'False'. So "rejected" means either 'False' or
 an exception, and we normalise both to 'False' here.
 -}
-accepts :: AuctionParams -> ScriptContext -> IO Bool
-accepts p ctx = do
-  r <- try (evaluate (auctionTypedValidator p ctx))
+runs :: Bool -> IO Bool
+runs ~b = do
+  -- The lazy pattern above matters: this module is compiled with Strict, which
+  -- would otherwise force the argument before 'try' is installed and let the
+  -- traceError escape uncaught.
+  r <- try (evaluate b)
   pure $ case r of
     Left (_ :: SomeException) -> False
-    Right b                   -> b
+    Right ok                  -> ok
+
+accepts :: AuctionParams -> ScriptContext -> IO Bool
+accepts p ctx = runs (auctionTypedValidator p ctx)
+
+-- | The same, for the lot minting policy.
+mints :: LotParams -> ScriptContext -> IO Bool
+mints p ctx = runs (lotTypedPolicy p ctx)
 
 paramsA :: AuctionParams
 paramsA = params scriptHashA lotA 50_000_000
@@ -311,6 +322,121 @@ honestBatchAccepted =
     assertBool "auction A should accept its own tagged refund" okA
     assertBool "auction B should accept its own tagged refund" okB
 
+-- ------------------------------------------------------- lot minting policy
+
+seedRef :: TxOutRef
+seedRef = txOutRefOf 7
+
+lotParams :: LotParams
+lotParams = LotParams {lpSeedRef = seedRef, lpTokenName = lotA, lpSeller = seller}
+
+-- | The transaction that creates the lot NFT: it spends the seed UTxO and
+-- mints exactly one token.
+oneShotMintAccepted :: TestTree
+oneShotMintAccepted = testCase "minting one lot while spending the seed is accepted" $ do
+  let txInfo =
+        emptyTxInfo
+          { txInfoInputs = [plainInput seedRef seller (ada 5_000_000)]
+          , txInfoMint = mintOf lotPolicy [(lotA, 1)]
+          }
+  ok <- mints lotParams (mintCtx txInfo lotPolicy)
+  assertBool "the one-shot mint should be accepted" ok
+
+{- | The uniqueness guarantee.
+
+Once the seed UTxO has been spent, no later transaction can consume it again,
+so no later transaction can satisfy this policy. Minting a second copy of the
+lot is impossible for the lifetime of the chain -- which is what makes the
+token trustworthy as a stand-in for the physical item.
+-}
+mintWithoutSeedRejected :: TestTree
+mintWithoutSeedRejected = testCase "minting without the seed UTxO is rejected" $ do
+  let txInfo =
+        emptyTxInfo
+          { -- some other UTxO, not the seed
+            txInfoInputs = [plainInput (txOutRefOf 99) attacker (ada 5_000_000)]
+          , txInfoMint = mintOf lotPolicy [(lotA, 1)]
+          }
+  ok <- mints lotParams (mintCtx txInfo lotPolicy)
+  assertBool "SECURITY: a second lot was minted without the seed" (not ok)
+
+mintingTwoRejected :: TestTree
+mintingTwoRejected = testCase "minting quantity two is rejected" $ do
+  let txInfo =
+        emptyTxInfo
+          { txInfoInputs = [plainInput seedRef seller (ada 5_000_000)]
+          , txInfoMint = mintOf lotPolicy [(lotA, 2)]
+          }
+  ok <- mints lotParams (mintCtx txInfo lotPolicy)
+  assertBool "SECURITY: the lot is not unique if two can be minted at once" (not ok)
+
+wrongTokenNameRejected :: TestTree
+wrongTokenNameRejected = testCase "minting a different token name is rejected" $ do
+  let txInfo =
+        emptyTxInfo
+          { txInfoInputs = [plainInput seedRef seller (ada 5_000_000)]
+          , txInfoMint = mintOf lotPolicy [(lotB, 1)]
+          }
+  ok <- mints lotParams (mintCtx txInfo lotPolicy)
+  assertBool "only the lot named in the parameters may be minted" (not ok)
+
+-- | Checking the whole map, rather than looking up one name, is what catches
+-- this: the seed is spent legitimately, but extra assets ride along.
+extraTokenNameRejected :: TestTree
+extraTokenNameRejected = testCase "minting extra token names alongside the lot is rejected" $ do
+  let txInfo =
+        emptyTxInfo
+          { txInfoInputs = [plainInput seedRef seller (ada 5_000_000)]
+          , txInfoMint = mintOf lotPolicy [(lotA, 1), (lotB, 1)]
+          }
+  ok <- mints lotParams (mintCtx txInfo lotPolicy)
+  assertBool "SECURITY: extra tokens were minted under the lot's policy" (not ok)
+
+-- ------------------------------------------------ claiming the item (burn)
+
+{- | Burning is the winner redeeming the coupon for the physical laptop.
+
+Spending the token already requires the holder's key, so demanding the
+seller's signature on top makes the burn a two-party handshake: on-chain
+evidence that both sides were present for the handover. Note the seed UTxO is
+long gone by now, and is not required.
+-}
+burnWithSellerSignatureAccepted :: TestTree
+burnWithSellerSignatureAccepted = testCase "burning the lot with the seller's signature is accepted" $ do
+  let txInfo =
+        emptyTxInfo
+          { txInfoInputs = [plainInput (txOutRefOf 42) alice (ada 2_000_000 <> lot lotA)]
+          , txInfoMint = mintOf lotPolicy [(lotA, -1)]
+          , txInfoSignatories = [alice, seller]
+          }
+  ok <- mints lotParams (mintCtx txInfo lotPolicy)
+  assertBool "a co-signed burn should be accepted" ok
+
+-- | Without the seller the burn is unilateral, and proves nothing about
+-- whether the item ever changed hands.
+burnWithoutSellerRejected :: TestTree
+burnWithoutSellerRejected = testCase "burning without the seller's signature is rejected" $ do
+  let txInfo =
+        emptyTxInfo
+          { txInfoInputs = [plainInput (txOutRefOf 42) alice (ada 2_000_000 <> lot lotA)]
+          , txInfoMint = mintOf lotPolicy [(lotA, -1)]
+          , txInfoSignatories = [alice]
+          }
+  ok <- mints lotParams (mintCtx txInfo lotPolicy)
+  assertBool "an unwitnessed burn must be rejected" (not ok)
+
+-- | Only 1 and -1 are meaningful for a token that is supposed to be unique.
+oddQuantityRejected :: TestTree
+oddQuantityRejected = testCase "burning a quantity other than one is rejected" $ do
+  let txInfo =
+        emptyTxInfo
+          { txInfoInputs = [plainInput (txOutRefOf 42) alice (ada 2_000_000 <> lot lotA)]
+          , txInfoMint = mintOf lotPolicy [(lotA, -2)]
+          , txInfoSignatories = [alice, seller]
+          }
+  ok <- mints lotParams (mintCtx txInfo lotPolicy)
+  assertBool "only -1 may be burned" (not ok)
+
 main :: IO ()
 main =
   defaultMain $
@@ -324,6 +450,20 @@ main =
           , belowReserveRejected
           , lateBidRejected
           , missingRefundRejected
+          ]
+      , testGroup
+          "lot minting policy"
+          [ oneShotMintAccepted
+          , mintWithoutSeedRejected
+          , mintingTwoRejected
+          , wrongTokenNameRejected
+          , extraTokenNameRejected
+          ]
+      , testGroup
+          "claiming the item"
+          [ burnWithSellerSignatureAccepted
+          , burnWithoutSellerRejected
+          , oddQuantityRejected
           ]
       , testGroup
           "double satisfaction"

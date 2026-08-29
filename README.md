@@ -3,6 +3,33 @@
 On-chain English auction for Cardano, written in Plinth (Plutus Tx).
 Master's thesis project.
 
+## Lifecycle
+
+    mint  ->  auction  ->  deliver  ->  burn
+
+The lot NFT is created, auctioned, handed to the winner, and destroyed when the
+winner collects the physical item. The burn is the on-chain receipt.
+
+## The lot token
+
+An auction needs something on-chain to stand for the physical item. That is an
+NFT minted by `src/LotMintingPolicy.hs`, a *one-shot* policy: it will only mint
+if the transaction spends one specific UTxO, named as a compile-time parameter.
+A UTxO can be spent once in the history of the chain, so the policy can succeed
+once, and the token is provably unique. Each item gets its own policy, and
+therefore its own `CurrencySymbol`.
+
+The token is a **bearer claim** on the physical item: whoever holds it is
+entitled to collect. Burning it is the winner redeeming that claim, and the
+policy requires the seller's signature on the burn as well as the holder's
+(spending the token needs the holder's key anyway). A burn is therefore a
+two-party receipt, and a claim already redeemed is distinguishable on-chain
+from one still outstanding.
+
+What the chain cannot do is force anyone to hand over a laptop. The auction is
+trustless; settlement of the physical good is not. The NFT narrows that gap by
+making the claim provable and transferable, but it does not close it.
+
 ## Design
 
 The auction is **one script UTxO**. Each bid spends it and recreates it with the
@@ -19,9 +46,10 @@ enforces that the seller gets the winning bid and the winner gets the lot token.
 | Path | What |
 |---|---|
 | `src/AuctionValidator.hs` | the validator: `NewBid` and `Payout` rules |
-| `app/GenBlueprint.hs` | emits `plutus.json` (CIP-57) with the compiled script |
+| `src/LotMintingPolicy.hs` | one-shot policy minting the NFT that stands for the item |
+| `app/GenBlueprint.hs` | emits `plutus.json` (CIP-57) with both compiled scripts |
 | `test/Fixtures.hs` | helpers for hand-building `ScriptContext` values |
-| `test/Main.hs` | behaviour tests + the double-satisfaction exploit |
+| `test/Main.hs` | behaviour tests, minting tests, double-satisfaction tests |
 | `scripts/install-cardano-libs.sh` | builds libsodium/secp256k1/blst (needs sudo) |
 
 ## Running
