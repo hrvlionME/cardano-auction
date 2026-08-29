@@ -240,12 +240,37 @@ auctionTypedValidator params ctx@(ScriptContext txInfo scriptRedeemer scriptInfo
               PlutusTx.traceError "Not found: lot output tagged with this auction's input"
 
 {-# INLINEABLE auctionUntypedValidator #-}
-auctionUntypedValidator :: AuctionParams -> BuiltinData -> PlutusTx.BuiltinUnit
-auctionUntypedValidator params ctx =
-  PlutusTx.check (auctionTypedValidator params (PlutusTx.unsafeFromBuiltinData ctx))
 
+-- | Note that the parameters arrive as 'BuiltinData' and are decoded here,
+-- rather than being taken as an 'AuctionParams' argument directly.
+--
+-- This is what lets off-chain tooling apply the parameters. 'liftCode' would
+-- bake them in using Plutus Core's native representation, but every off-chain
+-- library applies parameters as 'Data'. If the script expected the native form
+-- and received 'Data', it would try to case on a constant and fail at
+-- evaluation. Taking 'BuiltinData' makes both sides agree.
+auctionUntypedValidator :: BuiltinData -> BuiltinData -> PlutusTx.BuiltinUnit
+auctionUntypedValidator params ctx =
+  PlutusTx.check
+    ( auctionTypedValidator
+        (PlutusTx.unsafeFromBuiltinData params)
+        (PlutusTx.unsafeFromBuiltinData ctx)
+    )
+
+-- | The compiled script /before/ parameters are applied.
+--
+-- This is what belongs in the blueprint. CIP-57 describes a script's
+-- parameters separately from its compiled code, so the off-chain side applies
+-- the real ones. Publishing a pre-applied script instead means off-chain
+-- applies parameters a second time, and the script then receives its own
+-- parameters where it expects a ScriptContext.
+auctionValidatorCompiled ::
+  CompiledCode (BuiltinData -> BuiltinData -> PlutusTx.BuiltinUnit)
+auctionValidatorCompiled = $$(PlutusTx.compile [||auctionUntypedValidator||])
+
+-- | The script for one specific auction, parameters baked in.
 auctionValidatorScript ::
   AuctionParams -> CompiledCode (BuiltinData -> PlutusTx.BuiltinUnit)
 auctionValidatorScript params =
-  $$(PlutusTx.compile [||auctionUntypedValidator||])
-    `PlutusTx.unsafeApplyCode` PlutusTx.liftCode plcVersion110 params
+  auctionValidatorCompiled
+    `PlutusTx.unsafeApplyCode` PlutusTx.liftCode plcVersion110 (PlutusTx.toBuiltinData params)

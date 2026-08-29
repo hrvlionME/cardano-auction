@@ -110,12 +110,27 @@ lotTypedPolicy params (ScriptContext txInfo _ scriptInfo) = touchesExactlyTheLot
             else PlutusTx.traceError "Lot quantity must be exactly 1 (mint) or -1 (burn)"
 
 {-# INLINEABLE lotUntypedPolicy #-}
-lotUntypedPolicy :: LotParams -> BuiltinData -> PlutusTx.BuiltinUnit
-lotUntypedPolicy params ctx =
-  PlutusTx.check (lotTypedPolicy params (PlutusTx.unsafeFromBuiltinData ctx))
 
+-- | Parameters arrive as 'BuiltinData' so that off-chain tooling can apply
+-- them; see 'AuctionValidator.auctionUntypedValidator' for why.
+lotUntypedPolicy :: BuiltinData -> BuiltinData -> PlutusTx.BuiltinUnit
+lotUntypedPolicy params ctx =
+  PlutusTx.check
+    ( lotTypedPolicy
+        (PlutusTx.unsafeFromBuiltinData params)
+        (PlutusTx.unsafeFromBuiltinData ctx)
+    )
+
+-- | The compiled policy /before/ parameters are applied; see
+-- 'AuctionValidator.auctionValidatorCompiled' for why the blueprint wants this
+-- rather than a pre-applied script.
+lotPolicyCompiled ::
+  CompiledCode (BuiltinData -> BuiltinData -> PlutusTx.BuiltinUnit)
+lotPolicyCompiled = $$(PlutusTx.compile [||lotUntypedPolicy||])
+
+-- | The policy for one specific lot, parameters baked in.
 lotPolicyScript ::
   LotParams -> CompiledCode (BuiltinData -> PlutusTx.BuiltinUnit)
 lotPolicyScript params =
-  $$(PlutusTx.compile [||lotUntypedPolicy||])
-    `PlutusTx.unsafeApplyCode` PlutusTx.liftCode plcVersion110 params
+  lotPolicyCompiled
+    `PlutusTx.unsafeApplyCode` PlutusTx.liftCode plcVersion110 (PlutusTx.toBuiltinData params)

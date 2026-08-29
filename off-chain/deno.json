@@ -5,11 +5,16 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true
   },
-  "fmt": { "lineWidth": 100 },
+  "fmt": {
+    "lineWidth": 100
+  },
   "tasks": {
     "check": "deno check src scripts",
     "smoke": "deno run -A scripts/smoke.ts",
-    "wallet": "deno run -A scripts/gen-wallet.ts"
+    "wallet": "deno run -A scripts/gen-wallet.ts",
+    "mint-lot": "deno run -A scripts/mint-lot.ts",
+    "info": "deno run -A scripts/info.ts",
+    "verify-lot": "deno run -A scripts/verify-lot.ts"
   },
   "imports": {
     "@lucid-evolution/lucid": "npm:@lucid-evolution/lucid@^0.6.2",

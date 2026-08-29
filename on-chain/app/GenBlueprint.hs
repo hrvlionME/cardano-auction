@@ -1,59 +1,18 @@
--- | Emits a CIP-57 blueprint (plutus.json) containing the compiled auction
--- validator, for the off-chain side to build transactions against.
+-- | Emits a CIP-57 blueprint (plutus.json) for the off-chain side to build
+-- transactions against.
+--
+-- The scripts are written *unapplied*. CIP-57 describes each script's
+-- parameters separately, and off-chain applies the real ones; a pre-applied
+-- script here would be applied a second time off-chain and fail at evaluation.
 module Main where
 
 import AuctionValidator
 import Data.ByteString.Short qualified as Short
 import Data.Set qualified as Set
 import PlutusLedgerApi.Common (serialiseCompiledCode)
-import PlutusLedgerApi.V1.Crypto qualified as Crypto
-import PlutusLedgerApi.V1.Time qualified as Time
-import PlutusLedgerApi.V1.Value qualified as Value
-import PlutusLedgerApi.V3 qualified as V3
 import LotMintingPolicy
 import PlutusTx.Blueprint
-import PlutusTx.Builtins.HasOpaque (stringToBuiltinByteStringHex)
 import System.Environment (getArgs)
-
--- | Placeholder instance. Real values get filled in per auction; changing any
--- of these changes the script hash, and therefore the script address.
-auctionParams :: AuctionParams
-auctionParams =
-  AuctionParams
-    { apSeller =
-        Crypto.PubKeyHash
-          ( stringToBuiltinByteStringHex
-              "0000000000000000000000000000000000000000\
-              \0000000000000000000000000000000000000000"
-          )
-    , apCurrencySymbol =
-        Value.CurrencySymbol
-          ( stringToBuiltinByteStringHex
-              "00000000000000000000000000000000000000000000000000000000"
-          )
-    , apTokenName = Value.tokenName "LAPTOP"
-    , apMinBid = 100
-    , apEndTime = Time.fromMilliSeconds 1_725_227_091_000
-    }
-
--- | Placeholder seed. The real one is chosen off-chain at mint time: it must
--- be a UTxO the seller actually controls, and spending it is what makes the
--- lot token unique.
-lotParams :: LotParams
-lotParams =
-  LotParams
-    { lpSeedRef =
-        V3.TxOutRef
-          ( V3.TxId
-              ( stringToBuiltinByteStringHex
-                  "0000000000000000000000000000000000000000\
-                  \0000000000000000000000000000000000000000"
-              )
-          )
-          0
-    , lpTokenName = Value.tokenName "LAPTOP"
-    , lpSeller = apSeller auctionParams
-    }
 
 auctionContractBlueprint :: ContractBlueprint
 auctionContractBlueprint =
@@ -106,8 +65,7 @@ auctionValidatorBlueprint =
             , argumentSchema = definitionRef @AuctionDatum
             }
     , validatorCompiled = do
-        let script = auctionValidatorScript auctionParams
-        let code = Short.fromShort (serialiseCompiledCode script)
+        let code = Short.fromShort (serialiseCompiledCode auctionValidatorCompiled)
         Just (compiledValidator PlutusV3 code)
     }
 
@@ -134,8 +92,7 @@ lotPolicyBlueprint =
           }
     , validatorDatum = Nothing
     , validatorCompiled = do
-        let script = lotPolicyScript lotParams
-        let code = Short.fromShort (serialiseCompiledCode script)
+        let code = Short.fromShort (serialiseCompiledCode lotPolicyCompiled)
         Just (compiledValidator PlutusV3 code)
     }
 
