@@ -1,8 +1,14 @@
+# Haskell / cabal
 dist-newstyle/
 *.hi
 *.o
-plutus.json
 *.plutus
+
+# Deno / node
+node_modules/
+.env
+
+# editors
 .DS_Store
 *.swp
 *.swo
