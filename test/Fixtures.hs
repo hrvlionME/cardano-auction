@@ -2,7 +2,7 @@
 --
 -- We test 'auctionTypedValidator' directly as an ordinary Haskell function
 -- rather than running compiled Plutus Core. That is enough to exercise the
--- validator's *logic*, which is where the double-satisfaction flaw lives.
+-- validator's *logic*, which is where double satisfaction lives.
 module Fixtures where
 
 import AuctionValidator
@@ -67,9 +67,16 @@ pubKeyAddr pkh = Address (PubKeyCredential pkh) Nothing
 scriptAddr :: ScriptHash -> Address
 scriptAddr sh = Address (ScriptCredential sh) Nothing
 
--- | A plain payment to a wallet, no datum.
+-- | A plain payment to a wallet, no datum. The validator does not accept
+-- these as settling an obligation: see 'payToFor'.
 payTo :: PubKeyHash -> Value -> TxOut
 payTo pkh v = TxOut (pubKeyAddr pkh) v NoOutputDatum Nothing
+
+-- | A payment to a wallet tagged with the auction input it settles. The datum
+-- is the 'TxOutRef' of the auction UTxO being spent, which is what stops one
+-- output from discharging two auctions' obligations.
+payToFor :: TxOutRef -> PubKeyHash -> Value -> TxOut
+payToFor ref pkh v = TxOut (pubKeyAddr pkh) v (datumOf ref) Nothing
 
 -- | A continuing output back to the auction script, carrying new state.
 continuing :: ScriptHash -> Value -> AuctionDatum -> TxOut

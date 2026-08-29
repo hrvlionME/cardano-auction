@@ -12,7 +12,7 @@ export GHCUP_SKIP_UPDATE_CHECK := 1
 build:          ## compile the validator library
 	cabal build all
 
-test:           ## run the test suite (2 exploit tests are EXPECTED to fail)
+test:           ## run the test suite
 	cabal test --test-show-details=direct
 
 repl:           ## poke at the validator interactively

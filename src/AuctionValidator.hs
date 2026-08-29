@@ -16,10 +16,11 @@ import PlutusLedgerApi.V1.Interval (contains)
 import PlutusLedgerApi.V1.Value (lovelaceValueOf, valueOf)
 import PlutusLedgerApi.V3 (CurrencySymbol, Datum (..), Lovelace, OutputDatum (..), POSIXTime,
                            PubKeyHash, Redeemer (..), ScriptContext (..), ScriptInfo (..),
-                           TokenName, TxInfo (..), TxOut (..), from, getRedeemer, to)
+                           TokenName, TxInfo (..), TxOut (..), TxOutRef, from, getRedeemer, to)
 import PlutusLedgerApi.V3.Contexts (getContinuingOutputs)
 import PlutusTx
 import PlutusTx.Blueprint
+import PlutusTx.Builtins qualified as Builtins
 import PlutusTx.List qualified as List
 import PlutusTx.Prelude qualified as PlutusTx
 import PlutusTx.Show qualified as PlutusTx
@@ -100,6 +101,31 @@ auctionTypedValidator params ctx@(ScriptContext txInfo scriptRedeemer scriptInfo
           Nothing                 -> PlutusTx.traceError "Failed to parse AuctionDatum"
       _ -> PlutusTx.traceError "Expected SpendingScript with datum"
 
+    -- The particular auction UTxO whose spending this run is authorising.
+    -- Every obligation below is anchored to it; see 'settlesThisAuction'.
+    ownRef :: TxOutRef
+    ownRef = case scriptInfo of
+      SpendingScript oref _ -> oref
+      _                     -> PlutusTx.traceError "Expected SpendingScript"
+
+    -- The fix for double satisfaction.
+    --
+    -- Each obligation used to be discharged by asking the transaction at
+    -- large "is there an output paying X this much?". Two auction UTxOs spent
+    -- in one transaction would both find the /same/ output and both accept,
+    -- so a single payment settled two debts and the difference went to the
+    -- attacker as change.
+    --
+    -- An output now counts towards this auction only if it carries this
+    -- input's 'TxOutRef' as its datum. A 'TxOutRef' identifies one input of
+    -- one transaction, so no output can answer for two auctions at once.
+    -- Honest batching is unaffected: settle each auction with its own output
+    -- and tag each output with the input it settles.
+    settlesThisAuction :: TxOut -> Bool
+    settlesThisAuction o = case txOutDatum o of
+      OutputDatum (Datum d) -> Builtins.equalsData d (PlutusTx.toBuiltinData ownRef)
+      _                     -> False
+
     conditions :: [Bool]
     conditions = case redeemer of
       NewBid bid ->
@@ -134,10 +160,12 @@ auctionTypedValidator params ctx@(ScriptContext txInfo scriptRedeemer scriptInfo
           ( \o ->
               (toPubKeyHash (txOutAddress o) PlutusTx.== Just bidderPkh)
                 PlutusTx.&& (lovelaceValueOf (txOutValue o) PlutusTx.== amt)
+                PlutusTx.&& settlesThisAuction o
           )
           (txInfoOutputs txInfo) of
           Just _  -> True
-          Nothing -> PlutusTx.traceError "Not found: refund output"
+          Nothing ->
+            PlutusTx.traceError "Not found: refund output tagged with this auction's input"
 
     currencySymbol :: CurrencySymbol
     currencySymbol = apCurrencySymbol params
@@ -188,10 +216,12 @@ auctionTypedValidator params ctx@(ScriptContext txInfo scriptRedeemer scriptInfo
           ( \o ->
               (toPubKeyHash (txOutAddress o) PlutusTx.== Just (apSeller params))
                 PlutusTx.&& (lovelaceValueOf (txOutValue o) PlutusTx.== bAmount bid)
+                PlutusTx.&& settlesThisAuction o
           )
           (txInfoOutputs txInfo) of
           Just _  -> True
-          Nothing -> PlutusTx.traceError "Not found: Output paid to seller"
+          Nothing ->
+            PlutusTx.traceError "Not found: seller output tagged with this auction's input"
 
     highestBidderGetsAsset :: Bool
     ~highestBidderGetsAsset =
@@ -202,10 +232,12 @@ auctionTypedValidator params ctx@(ScriptContext txInfo scriptRedeemer scriptInfo
             ( \o ->
                 (toPubKeyHash (txOutAddress o) PlutusTx.== Just highestBidder)
                   PlutusTx.&& (valueOf (txOutValue o) currencySymbol tokenName PlutusTx.== 1)
+                  PlutusTx.&& settlesThisAuction o
             )
             (txInfoOutputs txInfo) of
             Just _  -> True
-            Nothing -> PlutusTx.traceError "Not found: Output paid to highest bidder"
+            Nothing ->
+              PlutusTx.traceError "Not found: lot output tagged with this auction's input"
 
 {-# INLINEABLE auctionUntypedValidator #-}
 auctionUntypedValidator :: AuctionParams -> BuiltinData -> PlutusTx.BuiltinUnit

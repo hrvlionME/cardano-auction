@@ -1,5 +1,5 @@
 -- | Behavioural tests for the auction validator, including the
--- double-satisfaction exploit against the reference design.
+-- double-satisfaction attack the input-anchored obligations defend against.
 module Main (main) where
 
 import AuctionValidator
@@ -45,6 +45,43 @@ firstBidAccepted = testCase "first bid at/above reserve is accepted" $ do
           }
   ok <- accepts paramsA (ctxFor txInfo ref d (NewBid bid))
   assertBool "honest opening bid should be accepted" ok
+
+-- | The ordinary case: outbid the standing bidder and hand their money back,
+-- tagged with the auction UTxO being spent.
+honestOutbidAccepted :: TestTree
+honestOutbidAccepted = testCase "outbidding with a tagged refund is accepted" $ do
+  let standing = Bid victim 100_000_000
+      d = AuctionDatum (Just standing)
+      bid = Bid alice 150_000_000
+      ref = txOutRefOf 0
+      txInfo =
+        emptyTxInfo
+          { txInfoInputs = [auctionInput ref scriptHashA lotA 100_000_000 d]
+          , txInfoOutputs =
+              [ payToFor ref victim (ada 100_000_000)
+              , continuing scriptHashA (ada 150_000_000 <> lot lotA) (AuctionDatum (Just bid))
+              ]
+          }
+  ok <- accepts paramsA (ctxFor txInfo ref d (NewBid bid))
+  assertBool "honest outbid with a correctly tagged refund should be accepted" ok
+
+-- | Settlement after the deadline: seller takes the money, winner takes the lot.
+honestPayoutAccepted :: TestTree
+honestPayoutAccepted = testCase "tagged payout after the deadline is accepted" $ do
+  let win = Bid alice 100_000_000
+      d = AuctionDatum (Just win)
+      ref = txOutRefOf 0
+      txInfo =
+        emptyTxInfo
+          { txInfoInputs = [auctionInput ref scriptHashA lotA 100_000_000 d]
+          , txInfoOutputs =
+              [ payToFor ref seller (ada 100_000_000)
+              , payToFor ref alice (ada 2_000_000 <> lot lotA)
+              ]
+          , txInfoValidRange = afterDeadline
+          }
+  ok <- accepts paramsA (ctxFor txInfo ref d Payout)
+  assertBool "honest settlement should be accepted" ok
 
 belowReserveRejected :: TestTree
 belowReserveRejected = testCase "bid below the reserve is rejected" $ do
@@ -93,26 +130,47 @@ missingRefundRejected = testCase "outbidding without refunding is rejected" $ do
   ok <- accepts paramsA (ctxFor txInfo ref d (NewBid bid))
   assertBool "displacing a bidder without refunding must be rejected" (not ok)
 
--- --------------------------------------------------------------- the exploit
+-- --------------------------------------------------- double satisfaction
 
-{- | Double satisfaction.
+{- | An untagged refund does not count.
+
+This is the mechanism the defence rests on, tested in isolation: the victim is
+paid the right amount at the right address, but the output does not name the
+auction UTxO it settles, so the validator will not credit it.
+-}
+untaggedRefundRejected :: TestTree
+untaggedRefundRejected = testCase "an untagged refund does not settle the debt" $ do
+  let standing = Bid victim 100_000_000
+      d = AuctionDatum (Just standing)
+      bid = Bid alice 150_000_000
+      ref = txOutRefOf 0
+      txInfo =
+        emptyTxInfo
+          { txInfoInputs = [auctionInput ref scriptHashA lotA 100_000_000 d]
+          , txInfoOutputs =
+              [ payTo victim (ada 100_000_000) -- correct, but carries no tag
+              , continuing scriptHashA (ada 150_000_000 <> lot lotA) (AuctionDatum (Just bid))
+              ]
+          }
+  ok <- accepts paramsA (ctxFor txInfo ref d (NewBid bid))
+  assertBool "a refund output with no input tag must not count" (not ok)
+
+{- | Double satisfaction, the original attack.
 
 Victim is the standing highest bidder on two separate auctions, at the same
 amount. The attacker outbids on BOTH in a single transaction, but includes only
 ONE refund output.
 
-Each validator independently scans @txInfoOutputs@ asking "is there an output
-paying victim 100 ADA?" — and both find the same output. Both accept. The victim
-is refunded 100 ADA instead of 200, and the attacker keeps the difference as
-change.
+Before the fix, each validator independently scanned @txInfoOutputs@ asking "is
+there an output paying victim 100 ADA?" — and both found the same output. Both
+accepted, the victim was refunded 100 ADA instead of 200, and the attacker kept
+the difference as change.
 
-Against the reference implementation this test FAILS, which is the point: it
-documents the vulnerability. It should pass once the validator anchors each
-obligation to its own input.
+Now the shared output carries no input tag, so neither auction credits it.
 -}
-doubleSatisfaction :: TestTree
-doubleSatisfaction =
-  testCase "one refund output cannot satisfy two auctions" $ do
+sharedUntaggedRefund :: TestTree
+sharedUntaggedRefund =
+  testCase "one untagged refund cannot satisfy two auctions" $ do
     let standing = Bid victim 100_000_000
         dA = AuctionDatum (Just standing)
         dB = AuctionDatum (Just standing)
@@ -139,16 +197,54 @@ doubleSatisfaction =
     okB <- accepts paramsB (ctxFor sharedTxInfo refB dB (NewBid bidB))
 
     assertBool
-      ( "SECURITY: both auctions accepted a transaction carrying a single "
-          <> "refund output for two distinct refund obligations. "
-          <> "Victim was underpaid by 100 ADA."
+      ( "SECURITY: an auction accepted a transaction carrying a single "
+          <> "untagged refund output for two distinct refund obligations."
       )
-      (not (okA && okB))
+      (not okA && not okB)
+
+{- | The sharper statement of the fix.
+
+The attacker is allowed to tag the shared refund — but a tag names exactly one
+input, so it buys them exactly one auction. The second still demands its own
+refund and rejects. The victim can no longer be underpaid.
+-}
+taggedRefundCountsOnce :: TestTree
+taggedRefundCountsOnce =
+  testCase "a tagged refund settles exactly one auction, not two" $ do
+    let standing = Bid victim 100_000_000
+        dA = AuctionDatum (Just standing)
+        dB = AuctionDatum (Just standing)
+        bidA = Bid attacker 150_000_000
+        bidB = Bid attacker 150_000_000
+        refA = txOutRefOf 0
+        refB = txOutRefOf 1
+
+        sharedTxInfo =
+          emptyTxInfo
+            { txInfoInputs =
+                [ auctionInput refA scriptHashA lotA 100_000_000 dA
+                , auctionInput refB scriptHashB lotB 100_000_000 dB
+                ]
+            , txInfoOutputs =
+                [ -- ONE refund, tagged for auction A only
+                  payToFor refA victim (ada 100_000_000)
+                , continuing scriptHashA (ada 150_000_000 <> lot lotA) (AuctionDatum (Just bidA))
+                , continuing scriptHashB (ada 150_000_000 <> lot lotB) (AuctionDatum (Just bidB))
+                ]
+            }
+
+    okA <- accepts paramsA (ctxFor sharedTxInfo refA dA (NewBid bidA))
+    okB <- accepts paramsB (ctxFor sharedTxInfo refB dB (NewBid bidB))
+
+    assertBool "the auction the refund was tagged for should accept" okA
+    assertBool
+      "SECURITY: a refund tagged for auction A also satisfied auction B"
+      (not okB)
 
 -- | The same flaw on the settlement path: one payout output, two sellers' worth
 -- of obligation.
-doubleSatisfactionPayout :: TestTree
-doubleSatisfactionPayout =
+sharedPayoutRejected :: TestTree
+sharedPayoutRejected =
   testCase "one payout output cannot satisfy two auctions" $ do
     let winA = Bid alice 100_000_000
         winB = Bid alice 100_000_000
@@ -164,9 +260,9 @@ doubleSatisfactionPayout =
                 , auctionInput refB scriptHashB lotB 100_000_000 dB
                 ]
             , txInfoOutputs =
-                [ payTo seller (ada 100_000_000) -- ONE payout, two owed
-                , payTo alice (ada 2_000_000 <> lot lotA)
-                , payTo alice (ada 2_000_000 <> lot lotB)
+                [ payToFor refA seller (ada 100_000_000) -- ONE payout, two owed
+                , payToFor refA alice (ada 2_000_000 <> lot lotA)
+                , payToFor refA alice (ada 2_000_000 <> lot lotB)
                 ]
             , txInfoValidRange = afterDeadline
             }
@@ -174,9 +270,46 @@ doubleSatisfactionPayout =
     okA <- accepts paramsA (ctxFor sharedTxInfo refA dA Payout)
     okB <- accepts paramsB (ctxFor sharedTxInfo refB dB Payout)
 
+    assertBool "the auction the payout was tagged for should accept" okA
     assertBool
       "SECURITY: one payout output satisfied two sellers' obligations"
-      (not (okA && okB))
+      (not okB)
+
+{- | The fix must not outlaw honest batching.
+
+Settling two auctions in one transaction stays legal, as long as each auction
+gets its own output tagged with its own input. Only sharing is forbidden.
+-}
+honestBatchAccepted :: TestTree
+honestBatchAccepted =
+  testCase "two auctions settle in one tx when each refund is tagged" $ do
+    let standing = Bid victim 100_000_000
+        dA = AuctionDatum (Just standing)
+        dB = AuctionDatum (Just standing)
+        bidA = Bid alice 150_000_000
+        bidB = Bid alice 150_000_000
+        refA = txOutRefOf 0
+        refB = txOutRefOf 1
+
+        sharedTxInfo =
+          emptyTxInfo
+            { txInfoInputs =
+                [ auctionInput refA scriptHashA lotA 100_000_000 dA
+                , auctionInput refB scriptHashB lotB 100_000_000 dB
+                ]
+            , txInfoOutputs =
+                [ payToFor refA victim (ada 100_000_000)
+                , payToFor refB victim (ada 100_000_000)
+                , continuing scriptHashA (ada 150_000_000 <> lot lotA) (AuctionDatum (Just bidA))
+                , continuing scriptHashB (ada 150_000_000 <> lot lotB) (AuctionDatum (Just bidB))
+                ]
+            }
+
+    okA <- accepts paramsA (ctxFor sharedTxInfo refA dA (NewBid bidA))
+    okB <- accepts paramsB (ctxFor sharedTxInfo refB dB (NewBid bidB))
+
+    assertBool "auction A should accept its own tagged refund" okA
+    assertBool "auction B should accept its own tagged refund" okB
 
 main :: IO ()
 main =
@@ -186,13 +319,18 @@ main =
       [ testGroup
           "well-formed transactions"
           [ firstBidAccepted
+          , honestOutbidAccepted
+          , honestPayoutAccepted
           , belowReserveRejected
           , lateBidRejected
           , missingRefundRejected
           ]
       , testGroup
           "double satisfaction"
-          [ doubleSatisfaction
-          , doubleSatisfactionPayout
+          [ untaggedRefundRejected
+          , sharedUntaggedRefund
+          , taggedRefundCountsOnce
+          , sharedPayoutRejected
+          , honestBatchAccepted
           ]
       ]

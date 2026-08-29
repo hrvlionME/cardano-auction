@@ -34,12 +34,23 @@ enforces that the seller gets the winning bid and the winner gets the lot token.
 The first build compiles the whole Plutus stack from source and takes a long
 time. Later builds are fast.
 
-## Known issue: double satisfaction
+## Double satisfaction
 
-`refundsPreviousHighestBid` and `sellerGetsHighestBid` ask *"is there an output
-paying X this amount?"*. One output can answer that for two auctions at once, so
-a transaction spending two auction UTxOs can settle two obligations with a
-single payment.
+The obligation checks (`refundsPreviousHighestBid`, `sellerGetsHighestBid`,
+`highestBidderGetsAsset`) work by scanning `txInfoOutputs`. Asked naively —
+*"is there an output paying X this amount?"* — one output answers for two
+auctions at once, so a transaction spending two auction UTxOs could settle two
+debts with a single payment and the attacker kept the difference as change.
 
-`test/Main.hs` demonstrates this, and **those two tests fail on purpose** until
-the validator anchors each obligation to its own input (`ownRef`).
+The fix is to anchor every obligation to the input it belongs to. An output
+counts towards this auction only if it carries this input's `TxOutRef` as its
+datum (`settlesThisAuction`). A `TxOutRef` names one input of one transaction,
+so no output can answer for two auctions.
+
+Honest batching still works — settle several auctions in one transaction by
+giving each its own output, tagged with the input it settles. The cost is that
+off-chain code must attach that datum to refund and payout outputs.
+
+`test/Main.hs` covers the attack from both sides: a shared untagged output is
+credited to neither auction, a shared output tagged for auction A is credited
+to A only, and two separately tagged outputs are credited to both.
