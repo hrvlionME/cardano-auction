@@ -2,7 +2,7 @@
 
 On-chain English auction. `on-chain/` is Haskell (Plinth), `off-chain/` is
 TypeScript on Deno. See the READMEs in each for detail; this file is the
-working context.
+working context, and `DEMO.md` is the runbook for showing it working.
 
 ## Working agreements
 
