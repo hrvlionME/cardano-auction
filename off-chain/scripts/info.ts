@@ -5,6 +5,9 @@
  */
 import { makeWalletLucid } from "../src/lucid.ts";
 import { network } from "../src/config.ts";
+import { friendlyErrors } from "../src/cli.ts";
+
+friendlyErrors();
 
 const lucid = await makeWalletLucid();
 const address = await lucid.wallet().address();

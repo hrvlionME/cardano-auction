@@ -8,6 +8,9 @@
  */
 import { mintingPolicyToId } from "@lucid-evolution/lucid";
 import { lotPolicyScript } from "../src/blueprint.ts";
+import { friendlyErrors } from "../src/cli.ts";
+
+friendlyErrors();
 
 let failures = 0;
 for await (const entry of Deno.readDir("state")) {

@@ -17,6 +17,30 @@ export const network = (Deno.env.get("CARDANO_NETWORK") ?? "Preview") as Network
 export const blockfrostProjectId = () => required("BLOCKFROST_PROJECT_ID");
 export const walletSeedPhrase = () => required("WALLET_SEED_PHRASE");
 
+/**
+ * Bidder wallets: BIDDER1_SEED_PHRASE, BIDDER2_SEED_PHRASE, and so on.
+ *
+ * All optional, because nothing in the contracts forbids the seller bidding on
+ * their own auction -- the whole lifecycle runs on one wallet. It demonstrates
+ * much less, though. With one key you never see a refund leave for someone
+ * else, and the burn's two-party handshake collapses into a single signature.
+ * With two bidders you get the case that actually exercises the design: one
+ * bidder displacing another, and the displaced stake having to find its way
+ * back to a stranger the contract knows only by public key hash.
+ */
+export const bidderSeedPhrase = (n: number) => required(`BIDDER${n}_SEED_PHRASE`);
+
+/** Which bidder wallets are actually configured, in order. */
+export function bidderIndices(): number[] {
+  const found: number[] = [];
+  for (let n = 1; n <= 9; n++) {
+    if (Deno.env.get(`BIDDER${n}_SEED_PHRASE`)) found.push(n);
+  }
+  return found;
+}
+
+export const hasBidderWallet = () => bidderIndices().length > 0;
+
 export function blockfrostUrl(n: Network = network): string {
   switch (n) {
     case "Preview":

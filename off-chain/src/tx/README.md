@@ -10,6 +10,11 @@ One module per transaction, matching the auction lifecycle:
 | `payout.ts` | after the deadline, pay the seller and deliver the lot |
 | `claim.ts` | winner and seller co-sign, burn the NFT |
 
+`auction.ts` is not a transaction. It holds what `bid.ts` and `payout.ts` agree
+on -- deriving the address, checking it against the saved one, finding the live
+auction UTxO, reading its datum, building the settlement tag -- so the two
+cannot drift apart in a detail that only surfaces as a failed evaluation.
+
 **The thing that will bite you:** `bid.ts` and `payout.ts` must attach the spent
 auction UTxO's `TxOutRef` as an inline datum on every output that settles an
 obligation -- the refund, the seller payment, the lot delivery. Use

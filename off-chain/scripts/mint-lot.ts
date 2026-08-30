@@ -9,6 +9,9 @@
 import { makeWalletLucid } from "../src/lucid.ts";
 import { mintLot } from "../src/tx/mint-lot.ts";
 import { network } from "../src/config.ts";
+import { friendlyErrors } from "../src/cli.ts";
+
+friendlyErrors();
 
 const tokenName = Deno.args[0] ?? "LAPTOP";
 
