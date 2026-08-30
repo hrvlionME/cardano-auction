@@ -23,32 +23,15 @@ export function makeLucid(): Promise<Lucid> {
  * caller actually wants that wallet -- passing an explicit seed never touches
  * WALLET_SEED_PHRASE.
  */
-export async function makeWalletLucid(
-  seed: string = walletSeedPhrase(),
-  addressType: AddressType = "Base",
-): Promise<Lucid> {
+export async function makeWalletLucid(seed: string = walletSeedPhrase()): Promise<Lucid> {
   const lucid = await makeLucid();
-  lucid.selectWallet.fromSeed(seed, { addressType });
+  lucid.selectWallet.fromSeed(seed);
   return lucid;
 }
 
-/**
- * Base or Enterprise: the same payment key, two addresses.
- *
- * This exists because of a limitation in the contract. `Bid` stores only a
- * `PubKeyHash`, so a party settling an auction for someone else knows their
- * payment key and nothing more -- not their staking credential, and therefore
- * not their real address. The most it can construct is an enterprise address,
- * which the validator accepts (`toPubKeyHash` ignores the staking part) but
- * which the recipient's ordinary wallet does not watch. The funds are theirs
- * and always were; they are simply sitting at the other address their key
- * controls. Selecting the Enterprise variant is how we look there.
- */
-export type AddressType = "Base" | "Enterprise";
-
 /** Bidder n, from BIDDER<n>_SEED_PHRASE. */
-export function makeBidderLucid(n: number, addressType: AddressType = "Base"): Promise<Lucid> {
-  return makeWalletLucid(bidderSeedPhrase(n), addressType);
+export function makeBidderLucid(n: number): Promise<Lucid> {
+  return makeWalletLucid(bidderSeedPhrase(n));
 }
 
 /**
@@ -118,4 +101,32 @@ export async function awaitTipSlot(
     await new Promise((r) => setTimeout(r, delayMs));
   }
   throw new Error(`Chain tip did not reach slot ${slot} in time.`);
+}
+
+/**
+ * Wait until the chain agrees a token no longer exists, and report its supply.
+ *
+ * Asks about the *asset*, not about a wallet. A wallet query answers "does this
+ * address still show the token", which right after a burn is answered from a
+ * stale index -- during development this reported one token remaining moments
+ * after a burn the node had already accepted. Total supply is the honest
+ * question, and zero is the honest answer.
+ */
+export async function awaitBurned(
+  unit: string,
+  { tries = 12, delayMs = 5_000 }: { tries?: number; delayMs?: number } = {},
+): Promise<{ quantity: string; events: number }> {
+  let last = { quantity: "?", events: 0 };
+  for (let i = 0; i < tries; i++) {
+    const res = await fetch(`${blockfrostUrl()}/assets/${unit}`, {
+      headers: { project_id: blockfrostProjectId() },
+    });
+    if (res.ok) {
+      const a = await res.json() as { quantity: string; mint_or_burn_count: number };
+      last = { quantity: a.quantity, events: a.mint_or_burn_count };
+      if (a.quantity === "0") return last;
+    }
+    if (i < tries - 1) await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return last;
 }

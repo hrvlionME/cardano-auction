@@ -22,10 +22,10 @@
  */
 import { Data } from "@lucid-evolution/lucid";
 import { chainTipSlot, type Lucid } from "../lucid.ts";
-import { AuctionRedeemer } from "../types.ts";
+import { AuctionRedeemer, fromPlutusAddress } from "../types.ts";
 import { type AuctionState, deserialiseParams } from "../state.ts";
 import type { AuctionParams } from "../types.ts";
-import { addressForPkh, resolveAuction } from "./auction.ts";
+import { resolveAuction } from "./auction.ts";
 
 /**
  * ADA attached to the output delivering the lot.
@@ -69,8 +69,8 @@ export function payoutValidFrom(params: AuctionParams): bigint {
 }
 
 export interface Settlement {
-  /** Winner's pubkey hash, or null if the auction closed with no bids. */
-  winnerPkh: string | null;
+  /** Winner's address, as they named it in their bid. null if nobody bid. */
+  winnerAddress: string | null;
   /** Winning bid in lovelace, or null if there were none. */
   winningBid: bigint | null;
   /** Where the winning bid went. Absent when there was no bid to pay. */
@@ -105,9 +105,11 @@ export async function payout(lucid: Lucid, auction: AuctionState): Promise<Settl
     );
   }
 
-  const winnerPkh = highestBid ? highestBid.bPkh : null;
-  const lotRecipient = winnerPkh ?? params.apSeller;
-  const lotAddress = await addressForPkh(lucid, lotRecipient);
+  // Both destinations are read, not reconstructed: the winner's from the datum
+  // they wrote, the seller's from the parameters they chose. Nothing here has
+  // to infer an address from a key hash any more.
+  const winnerAddress = highestBid ? fromPlutusAddress(highestBid.bAddress) : null;
+  const lotAddress = winnerAddress ?? fromPlutusAddress(params.apSeller);
 
   let tx = lucid
     .newTx()
@@ -122,7 +124,7 @@ export async function payout(lucid: Lucid, auction: AuctionState): Promise<Settl
   if (highestBid) {
     // Exactly bAmount lovelace, no more: `sellerGetsHighestBid` tests equality,
     // not sufficiency. Overpaying the seller fails just as hard as underpaying.
-    sellerAddress = await addressForPkh(lucid, params.apSeller);
+    sellerAddress = fromPlutusAddress(params.apSeller);
     tx = tx.pay.ToAddressWithData(
       sellerAddress,
       { kind: "inline", value: tag },
@@ -143,7 +145,7 @@ export async function payout(lucid: Lucid, auction: AuctionState): Promise<Settl
   const txHash = await signed.submit();
 
   return {
-    winnerPkh,
+    winnerAddress,
     winningBid: highestBid ? highestBid.bAmount : null,
     sellerAddress,
     lotAddress,

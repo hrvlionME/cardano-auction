@@ -46,7 +46,7 @@ paramsB = params scriptHashB lotB 50_000_000
 firstBidAccepted :: TestTree
 firstBidAccepted = testCase "first bid at/above reserve is accepted" $ do
   let d = AuctionDatum Nothing
-      bid = Bid alice 60_000_000
+      bid = Bid aliceAddr 60_000_000
       ref = txOutRefOf 0
       txInfo =
         emptyTxInfo
@@ -61,9 +61,9 @@ firstBidAccepted = testCase "first bid at/above reserve is accepted" $ do
 -- tagged with the auction UTxO being spent.
 honestOutbidAccepted :: TestTree
 honestOutbidAccepted = testCase "outbidding with a tagged refund is accepted" $ do
-  let standing = Bid victim 100_000_000
+  let standing = Bid victimAddr 100_000_000
       d = AuctionDatum (Just standing)
-      bid = Bid alice 150_000_000
+      bid = Bid aliceAddr 150_000_000
       ref = txOutRefOf 0
       txInfo =
         emptyTxInfo
@@ -79,7 +79,7 @@ honestOutbidAccepted = testCase "outbidding with a tagged refund is accepted" $ 
 -- | Settlement after the deadline: seller takes the money, winner takes the lot.
 honestPayoutAccepted :: TestTree
 honestPayoutAccepted = testCase "tagged payout after the deadline is accepted" $ do
-  let win = Bid alice 100_000_000
+  let win = Bid aliceAddr 100_000_000
       d = AuctionDatum (Just win)
       ref = txOutRefOf 0
       txInfo =
@@ -97,7 +97,7 @@ honestPayoutAccepted = testCase "tagged payout after the deadline is accepted" $
 belowReserveRejected :: TestTree
 belowReserveRejected = testCase "bid below the reserve is rejected" $ do
   let d = AuctionDatum Nothing
-      bid = Bid alice 10_000_000
+      bid = Bid aliceAddr 10_000_000
       ref = txOutRefOf 0
       txInfo =
         emptyTxInfo
@@ -111,7 +111,7 @@ belowReserveRejected = testCase "bid below the reserve is rejected" $ do
 lateBidRejected :: TestTree
 lateBidRejected = testCase "bid after the deadline is rejected" $ do
   let d = AuctionDatum Nothing
-      bid = Bid alice 60_000_000
+      bid = Bid aliceAddr 60_000_000
       ref = txOutRefOf 0
       txInfo =
         emptyTxInfo
@@ -127,9 +127,9 @@ lateBidRejected = testCase "bid after the deadline is rejected" $ do
 -- without handing their money back in the same transaction.
 missingRefundRejected :: TestTree
 missingRefundRejected = testCase "outbidding without refunding is rejected" $ do
-  let standing = Bid victim 100_000_000
+  let standing = Bid victimAddr 100_000_000
       d = AuctionDatum (Just standing)
-      bid = Bid alice 150_000_000
+      bid = Bid aliceAddr 150_000_000
       ref = txOutRefOf 0
       txInfo =
         emptyTxInfo
@@ -151,9 +151,9 @@ auction UTxO it settles, so the validator will not credit it.
 -}
 untaggedRefundRejected :: TestTree
 untaggedRefundRejected = testCase "an untagged refund does not settle the debt" $ do
-  let standing = Bid victim 100_000_000
+  let standing = Bid victimAddr 100_000_000
       d = AuctionDatum (Just standing)
-      bid = Bid alice 150_000_000
+      bid = Bid aliceAddr 150_000_000
       ref = txOutRefOf 0
       txInfo =
         emptyTxInfo
@@ -182,11 +182,11 @@ Now the shared output carries no input tag, so neither auction credits it.
 sharedUntaggedRefund :: TestTree
 sharedUntaggedRefund =
   testCase "one untagged refund cannot satisfy two auctions" $ do
-    let standing = Bid victim 100_000_000
+    let standing = Bid victimAddr 100_000_000
         dA = AuctionDatum (Just standing)
         dB = AuctionDatum (Just standing)
-        bidA = Bid attacker 150_000_000
-        bidB = Bid attacker 150_000_000
+        bidA = Bid attackerAddr 150_000_000
+        bidB = Bid attackerAddr 150_000_000
         refA = txOutRefOf 0
         refB = txOutRefOf 1
 
@@ -222,11 +222,11 @@ refund and rejects. The victim can no longer be underpaid.
 taggedRefundCountsOnce :: TestTree
 taggedRefundCountsOnce =
   testCase "a tagged refund settles exactly one auction, not two" $ do
-    let standing = Bid victim 100_000_000
+    let standing = Bid victimAddr 100_000_000
         dA = AuctionDatum (Just standing)
         dB = AuctionDatum (Just standing)
-        bidA = Bid attacker 150_000_000
-        bidB = Bid attacker 150_000_000
+        bidA = Bid attackerAddr 150_000_000
+        bidB = Bid attackerAddr 150_000_000
         refA = txOutRefOf 0
         refB = txOutRefOf 1
 
@@ -257,8 +257,8 @@ taggedRefundCountsOnce =
 sharedPayoutRejected :: TestTree
 sharedPayoutRejected =
   testCase "one payout output cannot satisfy two auctions" $ do
-    let winA = Bid alice 100_000_000
-        winB = Bid alice 100_000_000
+    let winA = Bid aliceAddr 100_000_000
+        winB = Bid aliceAddr 100_000_000
         dA = AuctionDatum (Just winA)
         dB = AuctionDatum (Just winB)
         refA = txOutRefOf 0
@@ -294,11 +294,11 @@ gets its own output tagged with its own input. Only sharing is forbidden.
 honestBatchAccepted :: TestTree
 honestBatchAccepted =
   testCase "two auctions settle in one tx when each refund is tagged" $ do
-    let standing = Bid victim 100_000_000
+    let standing = Bid victimAddr 100_000_000
         dA = AuctionDatum (Just standing)
         dB = AuctionDatum (Just standing)
-        bidA = Bid alice 150_000_000
-        bidB = Bid alice 150_000_000
+        bidA = Bid aliceAddr 150_000_000
+        bidB = Bid aliceAddr 150_000_000
         refA = txOutRefOf 0
         refB = txOutRefOf 1
 
@@ -321,6 +321,94 @@ honestBatchAccepted =
 
     assertBool "auction A should accept its own tagged refund" okA
     assertBool "auction B should accept its own tagged refund" okB
+
+-- ------------------------------------------------------ refund addresses
+
+{- | The regression test for the address bug.
+
+Alice bids from her ordinary wallet, whose address carries a staking
+credential. The refund is then paid to an address built from her /payment key
+alone/ -- the enterprise address, the only address you can construct knowing
+just a key hash.
+
+That output is spendable by Alice and would have satisfied the old
+@toPubKeyHash@ check, which compared payment credentials and discarded the
+staking half. It is not, however, the address she watches, so in practice her
+wallet showed nothing arriving. Comparing whole addresses rejects it.
+-}
+refundToEnterpriseAddressRejected :: TestTree
+refundToEnterpriseAddressRejected =
+  testCase "a refund to the right key at the wrong address is rejected" $ do
+    let standing = Bid aliceBaseAddr 100_000_000
+        d = AuctionDatum (Just standing)
+        bid = Bid victimAddr 150_000_000
+        ref = txOutRefOf 0
+        txInfo =
+          emptyTxInfo
+            { txInfoInputs = [auctionInput ref scriptHashA lotA 100_000_000 d]
+            , txInfoOutputs =
+                [ -- right key, right amount, right tag -- but the staking
+                  -- credential is missing, so it is a different address
+                  payToAddrFor ref aliceAddr (ada 100_000_000)
+                , continuing scriptHashA (ada 150_000_000 <> lot lotA) (AuctionDatum (Just bid))
+                ]
+            }
+    ok <- accepts paramsA (ctxFor txInfo ref d (NewBid bid))
+    assertBool
+      ( "a refund paid to the bidder's payment key but not to the address "
+          <> "they named must not count"
+      )
+      (not ok)
+
+-- | And the other half: refunding to exactly the address the bidder recorded
+-- is accepted, staking credential and all.
+refundToNamedAddressAccepted :: TestTree
+refundToNamedAddressAccepted =
+  testCase "a refund to the exact address the bidder named is accepted" $ do
+    let standing = Bid aliceBaseAddr 100_000_000
+        d = AuctionDatum (Just standing)
+        bid = Bid victimAddr 150_000_000
+        ref = txOutRefOf 0
+        txInfo =
+          emptyTxInfo
+            { txInfoInputs = [auctionInput ref scriptHashA lotA 100_000_000 d]
+            , txInfoOutputs =
+                [ payToAddrFor ref aliceBaseAddr (ada 100_000_000)
+                , continuing scriptHashA (ada 150_000_000 <> lot lotA) (AuctionDatum (Just bid))
+                ]
+            }
+    ok <- accepts paramsA (ctxFor txInfo ref d (NewBid bid))
+    assertBool "refunding the address the bidder named should be accepted" ok
+
+{- | The same distinction on the settlement path.
+
+A winner who bid from a base address must be delivered the lot at that address,
+not at the enterprise address sharing its payment key. This is the case that
+broke the real run: the lot arrived somewhere the winner's wallet could not
+see, alongside too little ADA to pay for the burn.
+-}
+payoutDeliversToNamedAddress :: TestTree
+payoutDeliversToNamedAddress =
+  testCase "payout must deliver the lot to the winner's named address" $ do
+    let win = Bid aliceBaseAddr 100_000_000
+        d = AuctionDatum (Just win)
+        ref = txOutRefOf 0
+        outputsTo addr =
+          [ payToAddrFor ref sellerAddr (ada 100_000_000)
+          , payToAddrFor ref addr (ada 2_000_000 <> lot lotA)
+          ]
+        txInfoWith addr =
+          emptyTxInfo
+            { txInfoInputs = [auctionInput ref scriptHashA lotA 100_000_000 d]
+            , txInfoOutputs = outputsTo addr
+            , txInfoValidRange = afterDeadline
+            }
+
+    wrong <- accepts paramsA (ctxFor (txInfoWith aliceAddr) ref d Payout)
+    right <- accepts paramsA (ctxFor (txInfoWith aliceBaseAddr) ref d Payout)
+
+    assertBool "delivering the lot to the wrong address must be rejected" (not wrong)
+    assertBool "delivering the lot to the named address should be accepted" right
 
 -- ------------------------------------------------------- lot minting policy
 
@@ -464,6 +552,12 @@ main =
           [ burnWithSellerSignatureAccepted
           , burnWithoutSellerRejected
           , oddQuantityRejected
+          ]
+      , testGroup
+          "refund addresses"
+          [ refundToEnterpriseAddressRejected
+          , refundToNamedAddressAccepted
+          , payoutDeliversToNamedAddress
           ]
       , testGroup
           "double satisfaction"

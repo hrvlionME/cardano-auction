@@ -11,12 +11,12 @@ module AuctionValidator where
 import GHC.Generics (Generic)
 
 import PlutusCore.Version (plcVersion110)
-import PlutusLedgerApi.V1.Address (toPubKeyHash)
+import PlutusLedgerApi.V1.Address (Address)
 import PlutusLedgerApi.V1.Interval (contains)
 import PlutusLedgerApi.V1.Value (lovelaceValueOf, valueOf)
 import PlutusLedgerApi.V3 (CurrencySymbol, Datum (..), Lovelace, OutputDatum (..), POSIXTime,
-                           PubKeyHash, Redeemer (..), ScriptContext (..), ScriptInfo (..),
-                           TokenName, TxInfo (..), TxOut (..), TxOutRef, from, getRedeemer, to)
+                           Redeemer (..), ScriptContext (..), ScriptInfo (..), TokenName,
+                           TxInfo (..), TxOut (..), TxOutRef, from, getRedeemer, to)
 import PlutusLedgerApi.V3.Contexts (getContinuingOutputs)
 import PlutusTx
 import PlutusTx.Blueprint
@@ -27,8 +27,15 @@ import PlutusTx.Show qualified as PlutusTx
 
 -- | Compile-time parameters. These are baked into the script, so each auction
 -- instance gets its own script address.
+--
+-- Note that 'apSeller' is an 'Address' and not a 'PubKeyHash'. The rule this
+-- codebase follows is: __a 'PubKeyHash' says who may authorise something; an
+-- 'Address' says where value is delivered.__ Everything here is a delivery
+-- destination, so everything here is an 'Address'. The one place a key hash is
+-- still correct is 'LotMintingPolicy.lpSeller', which is checked against
+-- @txInfoSignatories@ -- signatures are made by keys, not by addresses.
 data AuctionParams = AuctionParams
-  { apSeller         :: PubKeyHash
+  { apSeller         :: Address
   -- ^ Receives the winning bid, or the lot back if nobody bids.
   , apCurrencySymbol :: CurrencySymbol
   -- ^ Currency symbol of the lot token (the NFT standing for the laptop).
@@ -45,22 +52,41 @@ data AuctionParams = AuctionParams
 PlutusTx.makeLift ''AuctionParams
 PlutusTx.makeIsDataSchemaIndexed ''AuctionParams [('AuctionParams, 0)]
 
+-- | A standing bid: who to pay back, and how much.
+--
+-- 'bAddress' is a full 'Address' rather than a 'PubKeyHash', and the difference
+-- is not cosmetic. A Cardano address carries two credentials: a payment
+-- credential, which decides who may spend, and an optional staking credential,
+-- which decides where staking rewards accrue. A 'PubKeyHash' is only the first
+-- of those.
+--
+-- Recording only the key hash is enough to /recognise/ a valid refund but not
+-- to /construct/ one. Whoever builds the refund transaction knows the payment
+-- key and nothing else, so the only address they can form is an enterprise
+-- address -- the same key with the staking half omitted. That address is
+-- legitimate and the bidder can spend from it, but it is not the address their
+-- wallet watches, so a correct refund looks to them like no refund at all.
+--
+-- Storing the address the bidder actually used removes the guess.
 data Bid = Bid
-  { bPkh    :: PubKeyHash
-  -- ^ Bidder's public key hash; refunds and the lot are paid here.
-  , bAmount :: Lovelace
+  { bAddress :: Address
+  -- ^ Where refunds and the lot are delivered. Supplied by the bidder.
+  , bAmount  :: Lovelace
   -- ^ Bid amount in Lovelace.
   }
   deriving stock (Generic)
   deriving anyclass (HasBlueprintDefinition)
 
-PlutusTx.deriveShow ''Bid
+-- No 'PlutusTx.deriveShow' for 'Bid'. PlutusTx has no 'Show' instance for
+-- 'Address', and nothing here needs one: the only on-chain 'show' in this
+-- module renders a list length in an error message. Deriving it would mean
+-- hand-writing a 'Show' instance for a type we never print.
 PlutusTx.makeIsDataSchemaIndexed ''Bid [('Bid, 0)]
 
 instance PlutusTx.Eq Bid where
   {-# INLINEABLE (==) #-}
   b == b' =
-    bPkh b PlutusTx.== bPkh b'
+    bAddress b PlutusTx.== bAddress b'
       PlutusTx.&& bAmount b PlutusTx.== bAmount b'
 
 -- | The whole auction state: the highest bid so far, if any.
@@ -155,10 +181,13 @@ auctionTypedValidator params ctx@(ScriptContext txInfo scriptRedeemer scriptInfo
     refundsPreviousHighestBid :: Bool
     ~refundsPreviousHighestBid = case highestBid of
       Nothing -> True
-      Just (Bid bidderPkh amt) ->
+      Just (Bid bidderAddress amt) ->
         case List.find
           ( \o ->
-              (toPubKeyHash (txOutAddress o) PlutusTx.== Just bidderPkh)
+              -- Exact address equality, not "same payment key". Stricter than
+              -- the old 'toPubKeyHash' test, and simpler: the refund must land
+              -- at the address the bidder named, staking credential included.
+              (txOutAddress o PlutusTx.== bidderAddress)
                 PlutusTx.&& (lovelaceValueOf (txOutValue o) PlutusTx.== amt)
                 PlutusTx.&& settlesThisAuction o
           )
@@ -214,7 +243,7 @@ auctionTypedValidator params ctx@(ScriptContext txInfo scriptRedeemer scriptInfo
       Just bid ->
         case List.find
           ( \o ->
-              (toPubKeyHash (txOutAddress o) PlutusTx.== Just (apSeller params))
+              (txOutAddress o PlutusTx.== apSeller params)
                 PlutusTx.&& (lovelaceValueOf (txOutValue o) PlutusTx.== bAmount bid)
                 PlutusTx.&& settlesThisAuction o
           )
@@ -227,10 +256,10 @@ auctionTypedValidator params ctx@(ScriptContext txInfo scriptRedeemer scriptInfo
     ~highestBidderGetsAsset =
       let highestBidder = case highestBid of
             Nothing  -> apSeller params -- no bids: the lot goes home
-            Just bid -> bPkh bid
+            Just bid -> bAddress bid
        in case List.find
             ( \o ->
-                (toPubKeyHash (txOutAddress o) PlutusTx.== Just highestBidder)
+                (txOutAddress o PlutusTx.== highestBidder)
                   PlutusTx.&& (valueOf (txOutValue o) currencySymbol tokenName PlutusTx.== 1)
                   PlutusTx.&& settlesThisAuction o
             )

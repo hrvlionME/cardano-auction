@@ -8,7 +8,7 @@ module Fixtures where
 import AuctionValidator
 
 import PlutusLedgerApi.V1.Address (Address (..))
-import PlutusLedgerApi.V1.Credential (Credential (..))
+import PlutusLedgerApi.V1.Credential (Credential (..), StakingCredential (..))
 import PlutusLedgerApi.V1.Interval (from, to)
 import PlutusLedgerApi.V1.Value (CurrencySymbol (..), TokenName (..), Value, adaSymbol, adaToken,
                                  singleton)
@@ -27,6 +27,12 @@ seller = PubKeyHash "seller__________________________"
 alice = PubKeyHash "alice___________________________"
 victim = PubKeyHash "victim__________________________"
 attacker = PubKeyHash "attacker________________________"
+
+-- | A staking key. Only used to build base addresses -- nothing on-chain
+-- checks it. It exists so tests can tell a base address apart from an
+-- enterprise address built on the same payment key.
+aliceStake :: PubKeyHash
+aliceStake = PubKeyHash "alicestake______________________"
 
 -- | Two distinct auctions => two distinct script addresses.
 scriptHashA, scriptHashB :: ScriptHash
@@ -67,8 +73,30 @@ afterDeadline = from (deadline + 1_000)
 
 -- ------------------------------------------------------------- addresses/outs
 
+-- | An /enterprise/ address: a payment credential and no staking credential.
+-- This is the only kind of address you can build knowing just a key hash, and
+-- is therefore where a refund used to end up. See 'AuctionValidator.Bid'.
 pubKeyAddr :: PubKeyHash -> Address
 pubKeyAddr pkh = Address (PubKeyCredential pkh) Nothing
+
+-- | A /base/ address: the same payment credential, plus a staking credential.
+-- This is what an ordinary wallet actually uses and watches.
+baseAddr :: PubKeyHash -> PubKeyHash -> Address
+baseAddr pay stake =
+  Address (PubKeyCredential pay) (Just (StakingHash (PubKeyCredential stake)))
+
+-- | The parties, as the addresses a bid or a parameter now records.
+sellerAddr, aliceAddr, victimAddr, attackerAddr :: Address
+sellerAddr = pubKeyAddr seller
+aliceAddr = pubKeyAddr alice
+victimAddr = pubKeyAddr victim
+attackerAddr = pubKeyAddr attacker
+
+-- | Alice's real wallet address: same payment key as 'aliceAddr', but with a
+-- staking credential. Distinct from 'aliceAddr' as a value, spendable by the
+-- same key. The pair is what the refund tests turn on.
+aliceBaseAddr :: Address
+aliceBaseAddr = baseAddr alice aliceStake
 
 scriptAddr :: ScriptHash -> Address
 scriptAddr sh = Address (ScriptCredential sh) Nothing
@@ -83,6 +111,11 @@ payTo pkh v = TxOut (pubKeyAddr pkh) v NoOutputDatum Nothing
 -- output from discharging two auctions' obligations.
 payToFor :: TxOutRef -> PubKeyHash -> Value -> TxOut
 payToFor ref pkh v = TxOut (pubKeyAddr pkh) v (datumOf ref) Nothing
+
+-- | A tagged payment to an explicit address, rather than to a key hash. Needed
+-- once the destination is no longer implied by a key.
+payToAddrFor :: TxOutRef -> Address -> Value -> TxOut
+payToAddrFor ref addr v = TxOut addr v (datumOf ref) Nothing
 
 -- | An ordinary wallet input, e.g. the seed UTxO a one-shot policy consumes.
 plainInput :: TxOutRef -> PubKeyHash -> Value -> TxInInfo
@@ -110,7 +143,7 @@ auctionInput ref sh tn lovelace d =
 params :: ScriptHash -> TokenName -> Integer -> AuctionParams
 params _ tn minBid =
   AuctionParams
-    { apSeller = seller
+    { apSeller = sellerAddr
     , apCurrencySymbol = lotSymbol
     , apTokenName = tn
     , apMinBid = Lovelace minBid

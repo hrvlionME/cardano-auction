@@ -24,7 +24,7 @@
 import { Data, paymentCredentialOf } from "@lucid-evolution/lucid";
 import type { Lucid } from "../lucid.ts";
 import { auctionAddress } from "../blueprint.ts";
-import { AuctionDatum, type AuctionParams } from "../types.ts";
+import { AuctionDatum, type AuctionParams, toPlutusAddress } from "../types.ts";
 import type { LotState } from "../state.ts";
 
 /**
@@ -121,7 +121,10 @@ export async function openAuction(
   }
 
   const params: AuctionParams = {
-    apSeller: lot.sellerPkh,
+    // The seller's *full* address, not their key hash. Anyone may submit the
+    // payout, so the proceeds have to be deliverable by someone who knows
+    // nothing about the seller beyond these parameters.
+    apSeller: toPlutusAddress(address),
     // The policy id *is* the minting policy's script hash, and Plutus calls
     // that the CurrencySymbol. Same 28 bytes, two names.
     apCurrencySymbol: lot.policyId,

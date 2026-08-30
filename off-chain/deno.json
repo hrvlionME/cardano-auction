@@ -17,7 +17,6 @@
     "bid": "deno run -A scripts/bid.ts",
     "payout": "deno run -A scripts/payout.ts",
     "claim": "deno run -A scripts/claim.ts",
-    "sweep": "deno run -A scripts/sweep.ts",
     "info": "deno run -A scripts/info.ts",
     "verify-lot": "deno run -A scripts/verify-lot.ts"
   },

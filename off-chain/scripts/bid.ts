@@ -63,9 +63,10 @@ const placed = await bid(lucid, auction, amount);
 
 if (placed.refund) {
   console.log(
-    `refunding ${Number(placed.refund.amount) / 1_000_000} ADA to the previous ` +
-      `leader ${placed.refund.pkh.slice(0, 16)}...`,
+    `refunding ${Number(placed.refund.amount) / 1_000_000} ADA to the previous leader`,
   );
+  console.log(`  at ${placed.refund.address}`);
+  console.log(`  (the address they named in their own bid -- not one we guessed)`);
 } else {
   console.log("opening bid: nobody to refund");
 }

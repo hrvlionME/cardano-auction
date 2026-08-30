@@ -36,16 +36,27 @@ Done:
   by anchoring every obligation to its own input's `TxOutRef`
 - Lot minting policy: one-shot mint, plus a burn branch requiring the seller's
   signature (burn = the winner claiming the item)
-- 19 Haskell tests, all passing
-- Off-chain: all five transactions, plus `sweep` (see the address gotcha below)
+- 22 Haskell tests, all passing
+- Off-chain: all five transactions
 
-Two full runs were completed, both settling to a burned token
+Three full runs were completed, all settling to a burned token
 (`quantity 0, mint_or_burn_count 2` per Blockfrost):
 
     TESTLOT   1f5c4baf…  no-bid path: Payout with Nothing returns the lot,
                          then a single-signature burn (seller is the holder)
     TESTLOT2  5e889b6a…  four bids, two bidders displacing each other,
-                         Payout with Just, then a two-signature burn
+                         Payout with Just, then a two-signature burn.
+                         This run exposed the PubKeyHash defect below.
+    TESTLOT3  660cf932…  the same two-bidder scenario after the fix: the
+                         cross-party refund landed in bidder 1\'s real wallet,
+                         their enterprise address stayed empty, and the burn
+                         needed no sweep step
+
+The auction validator hash moved with the datum change, to
+`1a1e968813d2b07b6a5947e39e721d5d3ea961c4050a727c621bcd7e`. The lot policy is
+untouched (`ffeecefb…`), so lots minted before the change still verify.
+`state/archive/` holds two settled auctions recorded in the old datum format;
+they are history, and `deserialiseParams` cannot read them.
 
 `LAPTOP` (`ae7a1d01…`) is deliberately untouched and still in the seller's
 wallet — kept clean so the thesis demo and its screenshots are not polluted by
@@ -65,9 +76,7 @@ however many `BIDDER<n>_SEED_PHRASE` exist, so adding a third is just a
 Next, in order:
 1. Thesis writing — this is the priority now, and there is enough working to
    write the whole implementation chapter.
-2. Decide the `Bid` datum question below. It is a real defect with a real fix
-   and it is good thesis material either way.
-3. Indexer + DB + HTTP API, then frontend. Cuttable: the CLI already
+2. Indexer + DB + HTTP API, then frontend. Cuttable: the CLI already
    demonstrates everything the contracts do.
 
 ## Gotchas that cost real time — do not rediscover these
@@ -114,19 +123,32 @@ Next, in order:
   address. Use `awaitUtxo()` in `src/lucid.ts`, which polls an address for an
   expected transaction hash. Blockfrost's per-address index trails `awaitTx` by
   a few seconds, so *any* read straight after confirmation can be stale.
-- **Refunds and payouts land at enterprise addresses, and wallets do not watch
-  them.** `Bid` stores only a `PubKeyHash`, so whoever settles knows the
-  recipient's payment key and not their staking credential — the best address
-  it can build is an enterprise one. The validator accepts it (`toPubKeyHash`
-  ignores the staking part) and the money is genuinely theirs, but their
-  everyday wallet looks only at its base address and sees nothing. In the
-  two-bidder run, bidder 1 accumulated 18 test ADA of their own money sitting
-  invisible. `deno task sweep` is the off-chain repair; the real fix is on-chain
-  and is listed as an open question below.
+- **A `PubKeyHash` cannot name an address — fixed 2026-08-30, do not undo it.**
+  `Bid.bAddress` and `AuctionParams.apSeller` are `Address`, not `PubKeyHash`,
+  and the validator compares whole addresses instead of using `toPubKeyHash`.
+  The reason: a key hash is the payment credential only, so whoever settles an
+  auction can reconstruct at best an *enterprise* address — the same key with
+  the staking half missing. The validator accepted such an output and the money
+  was genuinely the recipient's, but their wallet watches only its base address
+  and showed nothing. Before the fix, bidder 1 accumulated 18 test ADA of their
+  own money sitting invisible, and the winner could not burn the lot: it landed
+  at an enterprise address holding 2 ADA while 190 ADA sat at their base
+  address, and a wallet spends from one address at a time.
+  The rule to keep: **a `PubKeyHash` says who may authorise; an `Address` says
+  where value is delivered.** `LotMintingPolicy.lpSeller` is still a
+  `PubKeyHash` and should stay one — it is checked against `txInfoSignatories`,
+  and signatures are made by keys, not addresses.
+- **`utxoByUnit` is not the only stale read.** Any wallet or address query made
+  straight after `awaitTx` may be answered from an index that has not caught
+  up: `open-auction` once refused a freshly minted lot as "not in your wallet",
+  and `claim` reported a token still outstanding moments after a burn the node
+  had already accepted. Use `awaitUtxo` for outputs and `awaitBurned` for
+  supply — the latter asks about the *asset*, which is the one question a
+  per-address index cannot answer stalely.
 
 ## Commands
 
-    cd on-chain  && make test         # 19 tests
+    cd on-chain  && make test         # 22 tests
     cd on-chain  && make blueprint    # regenerate plutus.json after ANY change
     cd off-chain && deno task check   # type-check
     cd off-chain && deno task smoke   # offline: encodings + params, no keys
@@ -140,7 +162,6 @@ The lifecycle, in order. Each takes a minute or two to confirm:
     deno task bid 7 --as 1           # bidder 1 bids 7 ADA
     deno task bid 9 --as 2           # bidder 2 outbids, refunding bidder 1
     deno task payout                 # after the deadline; waits for the tip
-    deno task sweep                  # recover funds at enterprise addresses
     deno task claim                  # holder + seller co-sign, burn the token
 
 Each takes an optional trailing id — any prefix of the policy id — to pick

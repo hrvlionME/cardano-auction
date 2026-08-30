@@ -35,10 +35,10 @@ await awaitTipSlot(needSlot);
 
 const result = await payout(lucid, auction);
 
-if (result.winnerPkh === null) {
+if (result.winnerAddress === null) {
   console.log("no bids: the lot goes back to the seller\n");
 } else {
-  console.log(`winner:   ${result.winnerPkh}`);
+  console.log(`winner:   ${result.winnerAddress}`);
   console.log(`bid:      ${ada(result.winningBid!)}  ->  ${result.sellerAddress}\n`);
 }
 
@@ -59,7 +59,7 @@ const path = await saveAuction({
   ...auction,
   settlement: {
     txHash: result.txHash,
-    winnerPkh: result.winnerPkh,
+    winnerAddress: result.winnerAddress,
     winningBid: result.winningBid === null ? null : result.winningBid.toString(),
     lotAddress: result.lotAddress,
   },

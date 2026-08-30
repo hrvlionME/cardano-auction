@@ -21,17 +21,23 @@
  * into the auction UTxO, paying for someone else's bid only loses you money.
  * The ledger, not the validator, is what stops you bidding funds you lack.
  */
-import { Data, paymentCredentialOf } from "@lucid-evolution/lucid";
+import { Data } from "@lucid-evolution/lucid";
 import type { Lucid } from "../lucid.ts";
-import { AuctionDatum, AuctionRedeemer, type Bid } from "../types.ts";
+import {
+  AuctionDatum,
+  AuctionRedeemer,
+  type Bid,
+  fromPlutusAddress,
+  toPlutusAddress,
+} from "../types.ts";
 import type { AuctionState } from "../state.ts";
-import { addressForPkh, resolveAuction } from "./auction.ts";
+import { resolveAuction } from "./auction.ts";
 
 export interface PlacedBid {
   /** The bid now recorded in the auction's datum. */
   bid: Bid;
   /** Who was refunded, and how much. null if this was the opening bid. */
-  refund: { pkh: string; address: string; amount: bigint } | null;
+  refund: { address: string; amount: bigint } | null;
   /** The auction UTxO consumed, whose TxOutRef tags the refund. */
   spent: { txHash: string; outputIndex: number };
   txHash: string;
@@ -48,7 +54,6 @@ export async function bid(
   );
 
   const bidderAddress = await lucid.wallet().address();
-  const bidderPkh = paymentCredentialOf(bidderAddress).hash;
 
   // Check `sufficientBid` here so a losing bid costs nothing but a moment,
   // rather than a submitted transaction and a script evaluation failure.
@@ -56,7 +61,8 @@ export async function bid(
     if (amount <= highestBid.bAmount) {
       throw new Error(
         `Bid must beat the standing bid.\n` +
-          `  standing: ${highestBid.bAmount} lovelace (by ${highestBid.bPkh})\n` +
+          `  standing: ${highestBid.bAmount} lovelace ` +
+          `(by ${fromPlutusAddress(highestBid.bAddress)})\n` +
           `  yours:    ${amount} lovelace`,
       );
     }
@@ -85,7 +91,10 @@ export async function bid(
     );
   }
 
-  const newBid: Bid = { bPkh: bidderPkh, bAmount: amount };
+  // The bidder names the address they want refunded at. It is their own wallet
+  // address, staking credential and all -- which is the point: nobody else has
+  // to guess it later.
+  const newBid: Bid = { bAddress: toPlutusAddress(bidderAddress), bAmount: amount };
 
   let tx = lucid
     .newTx()
@@ -107,8 +116,10 @@ export async function bid(
   if (highestBid) {
     // Exactly their stake, tagged with the input we are spending. Equality
     // again, not sufficiency -- refunding too much fails as hard as too little.
-    const address = await addressForPkh(lucid, highestBid.bPkh);
-    refund = { pkh: highestBid.bPkh, address, amount: highestBid.bAmount };
+    // The address comes straight out of the datum: the displaced bidder chose
+    // it themselves, so there is nothing to reconstruct and nothing to get wrong.
+    const address = fromPlutusAddress(highestBid.bAddress);
+    refund = { address, amount: highestBid.bAmount };
     tx = tx.pay.ToAddressWithData(
       address,
       { kind: "inline", value: tag },

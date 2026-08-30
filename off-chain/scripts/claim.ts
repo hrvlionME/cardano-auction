@@ -10,7 +10,7 @@
  * home to the seller, who is then both parties at once.
  */
 import { paymentCredentialOf } from "@lucid-evolution/lucid";
-import { makeBidderLucid, makeWalletLucid } from "../src/lucid.ts";
+import { awaitBurned, makeBidderLucid, makeWalletLucid } from "../src/lucid.ts";
 import { claim } from "../src/tx/claim.ts";
 import { loadLot } from "../src/state.ts";
 import { bidderIndices, network, walletSeedPhrase } from "../src/config.ts";
@@ -24,34 +24,27 @@ const lot = await loadLot(Deno.args[0]);
 /**
  * Whoever actually holds the token drives the transaction. Find them.
  *
- * Each key is checked at both of its addresses. `payout` delivers the lot to
- * whatever address it can build from the winner's `PubKeyHash`, and when the
- * settler is not the winner that is an enterprise address -- correct, spendable
- * by the winner, and invisible to their everyday base-address wallet. See the
- * note on `AddressType` in ../src/lucid.ts.
+ * Only each party's real wallet address is checked. `payout` now delivers the
+ * lot to the address the winner named in their own bid, so there is no second
+ * address to go looking in -- which is exactly what the datum change bought.
  */
 async function findHolder(): Promise<{ lucid: Lucid; isSeller: boolean; where: string }> {
-  const candidates: { lucid: Lucid; isSeller: boolean; where: string }[] = [];
-  for (const addressType of ["Base", "Enterprise"] as const) {
+  const candidates: { lucid: Lucid; isSeller: boolean; where: string }[] = [
+    { lucid: await makeWalletLucid(), isSeller: true, where: "seller" },
+  ];
+  for (const n of bidderIndices()) {
     candidates.push({
-      lucid: await makeWalletLucid(undefined, addressType),
-      isSeller: true,
-      where: `seller (${addressType})`,
+      lucid: await makeBidderLucid(n),
+      isSeller: false,
+      where: `bidder ${n}`,
     });
-    for (const n of bidderIndices()) {
-      candidates.push({
-        lucid: await makeBidderLucid(n, addressType),
-        isSeller: false,
-        where: `bidder ${n} (${addressType})`,
-      });
-    }
   }
 
   const looked: string[] = [];
   for (const c of candidates) {
     const utxos = await c.lucid.wallet().getUtxos();
     if (utxos.some((u) => (u.assets[lot.unit] ?? 0n) > 0n)) return c;
-    looked.push(`  ${c.where.padEnd(22)} ${await c.lucid.wallet().address()}`);
+    looked.push(`  ${c.where.padEnd(10)} ${await c.lucid.wallet().address()}`);
   }
   throw new Error(
     `None of these addresses holds ${lot.tokenName} (${lot.unit}):\n` +
@@ -88,10 +81,11 @@ console.log("\nconfirmed -- the policy accepted the burn\n");
 console.log(`  spent token UTxO:  ${result.spent.txHash}#${result.spent.outputIndex}`);
 console.log(`  co-signed:         ${result.coSigned}`);
 
-// The token should now not exist anywhere. Prove it rather than assume it.
-const stillHeld = (await lucid.wallet().getUtxos())
-  .reduce((n, u) => n + (u.assets[lot.unit] ?? 0n), 0n);
-console.log(`  token remaining:   ${stillHeld}`);
+// The token should now not exist anywhere. Prove it against the asset's total
+// supply rather than against a wallet, whose index lags a fresh burn.
+const supply = await awaitBurned(lot.unit);
+console.log(`  total supply now:  ${supply.quantity}`);
+console.log(`  mint/burn events:  ${supply.events}`);
 
 console.log(
   `\nThe claim is redeemed and the token is gone. The chain now records that\n` +

@@ -9,14 +9,94 @@
  * Constructor tags: PlutusTx encodes `Constr i` as CBOR tag 121 + i, so
  * constructor 0 is tag 121 (hex d879) and constructor 1 is tag 122 (d87a).
  */
-import { Data } from "@lucid-evolution/lucid";
+import { credentialToAddress, Data, getAddressDetails } from "@lucid-evolution/lucid";
+import { network } from "./config.ts";
 
 /**
- * Haskell: data Bid = Bid { bPkh :: PubKeyHash, bAmount :: Lovelace }
- * makeIsDataSchemaIndexed [('Bid, 0)] => Constr 0 [bytes, int]
+ * Haskell: PlutusLedgerApi.V1.Credential
+ * Constr 0 [PubKeyHash] for a key, Constr 1 [ScriptHash] for a script.
+ */
+export const CredentialSchema = Data.Enum([
+  Data.Object({ PubKeyCredential: Data.Tuple([Data.Bytes({ minLength: 28, maxLength: 28 })]) }),
+  Data.Object({ ScriptCredential: Data.Tuple([Data.Bytes({ minLength: 28, maxLength: 28 })]) }),
+]);
+export type CredentialD = Data.Static<typeof CredentialSchema>;
+
+/**
+ * Haskell: PlutusLedgerApi.V1.Credential.StakingCredential
+ * StakingHash is Constr 0 [Credential]; StakingPtr (Constr 1) is a legacy form
+ * nothing here produces, but it is part of the type so it must be in the schema.
+ */
+export const StakingCredentialSchema = Data.Enum([
+  Data.Object({ StakingHash: Data.Tuple([CredentialSchema]) }),
+  Data.Object({ StakingPtr: Data.Tuple([Data.Integer(), Data.Integer(), Data.Integer()]) }),
+]);
+export type StakingCredentialD = Data.Static<typeof StakingCredentialSchema>;
+
+/**
+ * Haskell: PlutusLedgerApi.V1.Address
+ *
+ *     Address = Address { addressCredential        :: Credential
+ *                       , addressStakingCredential :: Maybe StakingCredential }
+ *
+ * This is the type the auction now records instead of a bare PubKeyHash, which
+ * is the whole point: the staking half is what tells you *which* of a key's
+ * addresses its owner actually uses. See the note on `Bid` in
+ * ../../on-chain/src/AuctionValidator.hs.
+ */
+export const AddressSchema = Data.Object({
+  addressCredential: CredentialSchema,
+  addressStakingCredential: Data.Nullable(StakingCredentialSchema),
+});
+export type AddressD = Data.Static<typeof AddressSchema>;
+export const AddressD = AddressSchema as unknown as AddressD;
+
+/** Bech32 address -> the Plutus structure the validator compares against. */
+export function toPlutusAddress(bech32: string): AddressD {
+  const details = getAddressDetails(bech32);
+  const payment = details.paymentCredential;
+  if (!payment) {
+    throw new Error(`${bech32} has no payment credential; it cannot receive a payout.`);
+  }
+  const asCredential = (c: { type: "Key" | "Script"; hash: string }): CredentialD =>
+    c.type === "Key" ? { PubKeyCredential: [c.hash] } : { ScriptCredential: [c.hash] };
+
+  const stake = details.stakeCredential;
+  return {
+    addressCredential: asCredential(payment),
+    addressStakingCredential: stake ? { StakingHash: [asCredential(stake)] } : null,
+  };
+}
+
+/** The inverse: the structure from a datum back to an address you can pay. */
+export function fromPlutusAddress(addr: AddressD): string {
+  const asCredential = (c: CredentialD) =>
+    "PubKeyCredential" in c
+      ? { type: "Key" as const, hash: c.PubKeyCredential[0] }
+      : { type: "Script" as const, hash: c.ScriptCredential[0] };
+
+  const payment = asCredential(addr.addressCredential);
+  const stake = addr.addressStakingCredential;
+  if (stake === null) return credentialToAddress(network, payment);
+  if ("StakingHash" in stake) {
+    return credentialToAddress(network, payment, asCredential(stake.StakingHash[0]));
+  }
+  // StakingPtr: a legacy address form. Nothing in this project creates one, and
+  // Lucid cannot rebuild an address from it, so fail loudly rather than guess.
+  throw new Error("Pointer staking credentials are not supported.");
+}
+
+/**
+ * Haskell: data Bid = Bid { bAddress :: Address, bAmount :: Lovelace }
+ * makeIsDataSchemaIndexed [('Bid, 0)] => Constr 0 [Address, int]
+ *
+ * `bAddress` was a `PubKeyHash` until it became clear that a key hash cannot
+ * name an address: it identifies who may spend, not where to deliver. Paying a
+ * refund from a key hash alone can only ever produce an enterprise address,
+ * which the bidder owns but their wallet does not watch.
  */
 export const BidSchema = Data.Object({
-  bPkh: Data.Bytes(),
+  bAddress: AddressSchema,
   bAmount: Data.Integer(),
 });
 export type Bid = Data.Static<typeof BidSchema>;
@@ -65,9 +145,13 @@ export const TxOutRef = TxOutRefSchema as unknown as TxOutRef;
  * Haskell: data AuctionParams -- compile-time parameters.
  * Applied to the script before use; changing any field changes the script
  * hash and therefore the auction's address.
+ *
+ * `apSeller` is an Address for the same reason `Bid.bAddress` is: anyone may
+ * submit the payout, so the seller's proceeds must be deliverable by someone
+ * who knows nothing about the seller beyond these parameters.
  */
 export const AuctionParamsSchema = Data.Object({
-  apSeller: Data.Bytes(),
+  apSeller: AddressSchema,
   apCurrencySymbol: Data.Bytes(),
   apTokenName: Data.Bytes(),
   apMinBid: Data.Integer(),

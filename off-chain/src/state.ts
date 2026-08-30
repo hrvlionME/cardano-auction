@@ -11,7 +11,7 @@
  * UTxO at that address holding the lot NFT". The files are a convenience so
  * you do not have to retype 56-character hex strings, not a source of truth.
  */
-import type { AuctionParams } from "./types.ts";
+import { type AuctionParams, fromPlutusAddress, toPlutusAddress } from "./types.ts";
 
 const STATE_DIR = "state";
 
@@ -35,6 +35,7 @@ export interface AuctionState {
   tokenName: string;
   /** Compile-time parameters, serialised. BigInts become strings in JSON. */
   params: {
+    /** bech32, not the on-chain structure. See serialiseParams. */
     apSeller: string;
     apCurrencySymbol: string;
     apTokenName: string;
@@ -53,7 +54,7 @@ export interface AuctionState {
   settlement?: {
     txHash: string;
     /** null when the auction closed with no bids. */
-    winnerPkh: string | null;
+    winnerAddress: string | null;
     /** Lovelace, as a string. null when there were no bids. */
     winningBid: string | null;
     /** Where the lot ended up -- what `claim` will burn from. */
@@ -100,10 +101,16 @@ export function loadAuction(policyId?: string): Promise<AuctionState> {
   return readState<AuctionState>("auction", policyId);
 }
 
-/** JSON cannot hold BigInt, so the Lovelace and POSIXTime fields go out as strings. */
+/**
+ * JSON cannot hold BigInt, so Lovelace and POSIXTime go out as strings; and the
+ * seller is stored as a bech32 address rather than as the nested Plutus
+ * structure, because a human reading this file should be able to see who gets
+ * paid. `deserialiseParams` rebuilds the structure deterministically, so the
+ * script hash it re-derives is identical.
+ */
 export function serialiseParams(p: AuctionParams): AuctionState["params"] {
   return {
-    apSeller: p.apSeller,
+    apSeller: fromPlutusAddress(p.apSeller),
     apCurrencySymbol: p.apCurrencySymbol,
     apTokenName: p.apTokenName,
     apMinBid: p.apMinBid.toString(),
@@ -114,7 +121,7 @@ export function serialiseParams(p: AuctionParams): AuctionState["params"] {
 /** The inverse. Every later transaction must rebuild the *exact* same params. */
 export function deserialiseParams(p: AuctionState["params"]): AuctionParams {
   return {
-    apSeller: p.apSeller,
+    apSeller: toPlutusAddress(p.apSeller),
     apCurrencySymbol: p.apCurrencySymbol,
     apTokenName: p.apTokenName,
     apMinBid: BigInt(p.apMinBid),

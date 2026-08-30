@@ -7,19 +7,11 @@
  * settlement tag. Keeping that in one place means the two cannot drift apart
  * in some detail that only shows up as a failed on-chain evaluation.
  */
-import {
-  credentialToAddress,
-  Data,
-  keyHashToCredential,
-  paymentCredentialOf,
-  type Script,
-  type UTxO,
-} from "@lucid-evolution/lucid";
+import { Data, type Script, type UTxO } from "@lucid-evolution/lucid";
 import type { Lucid } from "../lucid.ts";
 import { auctionAddress, auctionScript } from "../blueprint.ts";
 import { AuctionDatum, type AuctionParams, type Bid, settlementTag } from "../types.ts";
 import { type AuctionState, deserialiseParams } from "../state.ts";
-import { network } from "../config.ts";
 
 export interface ResolvedAuction {
   params: AuctionParams;
@@ -32,25 +24,6 @@ export interface ResolvedAuction {
   highestBid: Bid | null;
   /** This input's TxOutRef, hex-encoded -- the datum every settling output needs. */
   tag: string;
-}
-
-/**
- * An address the holder of `pkh` can actually spend from.
- *
- * The validator checks addresses with `toPubKeyHash`, which reads the payment
- * credential and ignores the staking part, so any address built on this
- * payment key satisfies it. Which one we pick still matters off-chain: a
- * seed-phrase wallet watches exactly one address, its base address. Paying
- * someone at a bare enterprise address built from the same key would satisfy
- * the validator and then never appear in their wallet, looking for all the
- * world like the money vanished. So a key we hold gets its real address, and
- * anyone else gets an enterprise address -- the most that can be built knowing
- * only a payment key hash.
- */
-export async function addressForPkh(lucid: Lucid, pkh: string): Promise<string> {
-  const own = await lucid.wallet().address();
-  if (paymentCredentialOf(own).hash === pkh) return own;
-  return credentialToAddress(network, keyHashToCredential(pkh));
 }
 
 /** Locate the live auction and everything needed to spend it. */
