@@ -137,6 +137,80 @@ cannot go wrong in front of an audience. They show that the rules are real.
 Errors print as plain sentences. `DEBUG=1` restores the full stack trace when
 you actually need it.
 
+
+---
+
+## Part D — the indexer and the read API
+
+Optional, and a different kind of demonstration: Parts A–C show the contract
+working, this shows an application built *around* it.
+
+The indexer stores into MariaDB, so the server has to be up. Once per machine:
+
+    sudo systemctl start mariadb
+    sudo mariadb < off-chain/sql/setup.sql
+
+Then:
+
+    cd off-chain
+    deno task sync              # replay every known auction from the chain
+    deno task serve --sync      # HTTP API on :8000, syncing while it serves
+
+Then, in another terminal:
+
+    curl -s localhost:8000/health | jq
+    curl -s localhost:8000/auctions | jq
+    curl -s localhost:8000/auctions/<policyId> | jq
+    curl -s localhost:8000/auctions/<policyId>/events | jq
+
+### The two points worth making
+
+**The database is not authoritative, and can be proved so.** Destroy it
+completely and watch it come back:
+
+    deno task db:reset
+
+That drops every table, recreates them, and re-syncs from the chain. It prints
+what it dropped and what returned, and the two match, because everything in it
+is derived. Syncing is idempotent — each event is keyed by
+(auction, transaction), so a sync can be interrupted at any point and simply
+run again.
+
+**This is the sentence to say while it runs:** a conventional auction site
+cannot survive this demonstration. Drop its tables and the bids are gone, because
+the bids only ever existed there. Here the database is a cache of something that
+already happened on a ledger nobody in this room controls.
+
+If you want to see it in SQL rather than through the CLI, MariaDB is right
+there:
+
+    mariadb -u auction -pauction auction_indexer -e "SELECT token_name, status FROM auctions"
+    mariadb -u auction -pauction auction_indexer -e "SELECT kind, amount, tx_hash FROM events ORDER BY block_height"
+
+**The API is read-only, and that is the design.** It holds no keys and signs
+nothing. `POST` returns 405 with *"This API is read-only. State changes are
+signed transactions."* Say plainly what that buys: this server can lag, crash,
+serve stale data, or lie outright, and no bidder loses a lovelace. The worst it
+can do is mislead someone about the state of an auction — a real harm, but a
+far smaller one than being able to take funds. A conventional auction site's
+backend can do both. Bidding goes through a wallet, which is what
+`deno task bid` demonstrates.
+
+### The limitation to volunteer
+
+Because `AuctionParams` are compile-time parameters, every auction is a
+different script at a different address. **There is no "auction contract" to
+watch.** The indexer holds a list of addresses and can only ever learn about
+auctions it was told about — here, from `state/auction-*.json`; in a deployed
+system, from a table the API writes at creation time. Either way, an auction
+opened by a stranger against the same validator source but with different
+parameters is invisible to this indexer forever.
+
+That is the concrete cost of compile-time parameters, and it is the practical
+argument for the alternative design: parameters in the datum, one shared
+script, one address to watch — at the price of validating parameters the chain
+did not derive. It is documented at the top of `src/indexer/sync.ts`.
+
 ---
 
 ## What to claim, and what not to

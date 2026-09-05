@@ -16,3 +16,7 @@ node_modules/
 
 # off-chain run artefacts
 off-chain/state/
+
+# The indexer's data now lives in MariaDB, not in the repo. It is derived from
+# the chain and rebuildable with `deno task db:reset`, so nothing here is worth
+# committing or backing up.

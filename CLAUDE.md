@@ -37,7 +37,7 @@ Done:
 - Lot minting policy: one-shot mint, plus a burn branch requiring the seller's
   signature (burn = the winner claiming the item)
 - 22 Haskell tests, all passing
-- Off-chain: all five transactions
+- Off-chain: all five transactions, plus a MariaDB indexer and a read-only HTTP API
 
 Three full runs were completed, all settling to a burned token
 (`quantity 0, mint_or_burn_count 2` per Blockfrost):
@@ -74,10 +74,17 @@ however many `BIDDER<n>_SEED_PHRASE` exist, so adding a third is just a
 `.env` line.
 
 Next, in order:
-1. Thesis writing — this is the priority now, and there is enough working to
+1. Thesis writing — the priority, and there is more than enough working to
    write the whole implementation chapter.
-2. Indexer + DB + HTTP API, then frontend. Cuttable: the CLI already
-   demonstrates everything the contracts do.
+2. Frontend, if time survives. Cuttable: the CLI plus `deno task serve`
+   already demonstrate everything the contracts do.
+
+If a frontend does happen, that is the moment to split the repo further, and
+the boundary should be drawn around the *shared* code rather than around the
+indexer: `core/` (types, blueprint, config — the definitions both halves must
+agree on), `cli/`, `server/`, `web/`. Splitting earlier buys nothing and risks
+schema drift, which is the most dangerous failure mode here because it fails
+silently on-chain rather than at build time.
 
 ## Gotchas that cost real time — do not rediscover these
 
@@ -164,6 +171,10 @@ The lifecycle, in order. Each takes a minute or two to confirm:
     deno task payout                 # after the deadline; waits for the tip
     deno task claim                  # holder + seller co-sign, burn the token
 
+    deno task sync                   # replay auctions from the chain into MariaDB
+    deno task serve --sync           # read-only HTTP API on :8000
+    deno task db:reset               # drop every table and rebuild from chain
+
 Each takes an optional trailing id — any prefix of the policy id — to pick
 between lots when more than one is on disk. Errors print as plain messages;
 `DEBUG=1` restores the stack trace.
@@ -171,6 +182,58 @@ between lots when more than one is on disk. Errors print as plain messages;
 After changing anything in `on-chain/`, run `make blueprint` then
 `deno task verify-lot`. Script hashes move when the Haskell moves, and a stale
 blueprint means building transactions against an address nobody is watching.
+
+## The indexer
+
+`off-chain/src/indexer/` — MariaDB via `npm:mysql2`, plus a read-only HTTP API.
+It lives inside `off-chain/` on purpose: it must decode datums with the *same*
+schemas the transaction builders encode with, and derive addresses through the
+*same* parameter application. Duplicating those would guarantee drift.
+
+One-time setup (the server is not enabled at boot on this machine):
+
+    sudo systemctl start mariadb
+    sudo mariadb < off-chain/sql/setup.sql
+
+That creates database `auction_indexer` and user `auction`. Credentials live in
+`off-chain/.env` as `DB_HOST` / `DB_PORT` / `DB_USER` / `DB_PASSWORD` /
+`DB_NAME`, all with working defaults. `openDb()` fails with those two commands
+printed rather than a driver stack trace, so a dead server is self-explaining.
+
+**It was SQLite until 2026-09-05.** The swap is worth a paragraph in the thesis
+because the reasoning is the interesting part, not the SQL: an embedded store is
+a file owned by one process, which fits a single CLI indexer and does not fit an
+indexer writing while an API server and a browser read. Nothing about the
+*design* changed — the schema, the shape-based classification and the idempotent
+sync are identical. What changed is that readers get a connection instead of
+needing to share a filesystem. Dialect deltas were small (`AUTOINCREMENT` →
+`AUTO_INCREMENT`, `ON CONFLICT` → `ON DUPLICATE KEY UPDATE`, `INSERT OR IGNORE`
+→ `INSERT IGNORE`, `CHECK` → `ENUM`, and `TEXT` keys needing explicit widths);
+the real cost was that MariaDB drivers are async, so `await` propagates through
+`sync.ts`, `api.ts` and both entry scripts.
+
+Two properties to preserve:
+
+- **The database is derived, never authoritative.** `deno task db:reset` drops
+  every table, recreates them and re-syncs; it rebuilds from the chain. Sync is
+  idempotent via a `UNIQUE (policy_id, tx_hash)` key, so it is safe to
+  interrupt. The reset command prints what it dropped and what came back so the
+  two can be compared out loud — a conventional auction site cannot survive the
+  same demonstration, because there the bids only ever existed in the database.
+- **The API holds no keys and signs nothing.** It can lag, crash or lie and no
+  bidder loses money; the worst case is misleading someone about an auction's
+  state. Bidding goes through a wallet, not through the server.
+
+Events are classified by transaction *shape* rather than by redeemer — an
+output at the address with no input from it is an open, an input with an output
+back is a bid, an input with no output back is a settle — which is enough to
+reconstruct the whole history.
+
+**The limitation:** compile-time parameters mean every auction is a different
+script at a different address, so there is no contract to watch. The indexer
+can only learn about auctions it is told about (currently from
+`state/auction-*.json`). An auction opened by a stranger is invisible to it
+forever. This is the practical argument for the first open question below.
 
 ## Open design questions for the thesis
 

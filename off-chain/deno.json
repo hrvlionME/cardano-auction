@@ -17,12 +17,17 @@
     "bid": "deno run -A scripts/bid.ts",
     "payout": "deno run -A scripts/payout.ts",
     "claim": "deno run -A scripts/claim.ts",
+    "sync": "deno run -A scripts/sync.ts",
+    "serve": "deno run -A scripts/serve.ts",
     "info": "deno run -A scripts/info.ts",
-    "verify-lot": "deno run -A scripts/verify-lot.ts"
+    "verify-lot": "deno run -A scripts/verify-lot.ts",
+    "db:reset": "deno run -A scripts/db-reset.ts"
   },
   "imports": {
     "@lucid-evolution/lucid": "npm:@lucid-evolution/lucid@^0.6.2",
     "@std/assert": "jsr:@std/assert@^1.0.19",
-    "@std/dotenv": "jsr:@std/dotenv@^0.225.8"
+    "@std/dotenv": "jsr:@std/dotenv@^0.225.8",
+    "mysql2": "npm:mysql2@^3.11.5",
+    "mysql2/": "npm:/mysql2@^3.11.5/"
   }
 }

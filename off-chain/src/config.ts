@@ -51,3 +51,20 @@ export function blockfrostUrl(n: Network = network): string {
       return "https://cardano-mainnet.blockfrost.io/api/v0";
   }
 }
+
+/**
+ * The indexer's MariaDB connection.
+ *
+ * Read lazily, like the Blockfrost key: the smoke test and every transaction
+ * builder run without a database, because the database is not on the path that
+ * moves money. Only the indexer and the read API need it.
+ */
+export function dbConfig() {
+  return {
+    host: Deno.env.get("DB_HOST") ?? "127.0.0.1",
+    port: Number(Deno.env.get("DB_PORT") ?? 3306),
+    user: Deno.env.get("DB_USER") ?? "auction",
+    password: Deno.env.get("DB_PASSWORD") ?? "",
+    database: Deno.env.get("DB_NAME") ?? "auction_indexer",
+  };
+}
