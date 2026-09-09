@@ -73,18 +73,21 @@ faster and needs no captcha. `bidderIndices()` in `src/config.ts` discovers
 however many `BIDDER<n>_SEED_PHRASE` exist, so adding a third is just a
 `.env` line.
 
-Next, in order:
-1. Thesis writing — the priority, and there is more than enough working to
-   write the whole implementation chapter.
-2. Frontend, if time survives. Cuttable: the CLI plus `deno task serve`
-   already demonstrate everything the contracts do.
+Next: **thesis writing.** Everything the implementation chapter needs is built
+and evidenced on-chain. A template exists as of 2026-09-05.
 
-If a frontend does happen, that is the moment to split the repo further, and
-the boundary should be drawn around the *shared* code rather than around the
-indexer: `core/` (types, blueprint, config — the definitions both halves must
-agree on), `cli/`, `server/`, `web/`. Splitting earlier buys nothing and risks
-schema drift, which is the most dangerous failure mode here because it fails
-silently on-chain rather than at build time.
+The frontend was built on 2026-09-05 — see "The web app" below. It exists
+because the demonstration has to be legible to a non-technical mentor, and
+possibly shown publicly later; the CLI and the API were already sufficient as
+*proof*, but not as *presentation*.
+
+The repo was **not** split into `core/` / `cli/` / `server/` / `web/`, though
+earlier notes here anticipated it. It turned out unnecessary: `web/` imports the
+shared modules directly through a Vite alias, so there is one copy of the
+schemas and one parameter application, which is the property the split was for.
+A split would move the same files behind package boundaries and buy nothing that
+the alias does not already give. Revisit it only if a second consumer appears
+that cannot reach into `off-chain/src/`.
 
 ## Gotchas that cost real time — do not rediscover these
 
@@ -174,6 +177,10 @@ The lifecycle, in order. Each takes a minute or two to confirm:
     deno task sync                   # replay auctions from the chain into MariaDB
     deno task serve --sync           # read-only HTTP API on :8000
     deno task db:reset               # drop every table and rebuild from chain
+    deno task web                    # Vite dev server on :5173 (needs serve running)
+    deno task web:build              # bundle into web/dist, which `serve` then hosts
+    deno task web:check              # type-check the browser code
+                                     # accounts live at /auth/* and /me/*
 
 Each takes an optional trailing id — any prefix of the policy id — to pick
 between lots when more than one is on disk. Errors print as plain messages;
@@ -234,6 +241,201 @@ script at a different address, so there is no contract to watch. The indexer
 can only learn about auctions it is told about (currently from
 `state/auction-*.json`). An auction opened by a stranger is invisible to it
 forever. This is the practical argument for the first open question below.
+
+## The web app
+
+`off-chain/web/` — React 18 + Vite 6 + TypeScript, driven by **Deno, not npm**
+(`deno run -A npm:vite`). npm is not installed on this machine and installing it
+would mean a second toolchain and a `sudo`; Deno already resolves npm packages,
+so `deno task web` and `deno task web:build` are the whole story.
+
+Two ways to run it:
+
+    deno task serve --sync        # API + chain proxy + web/dist, one port
+    deno task web                 # Vite dev server on :5173 with hot reload,
+                                  # proxying /auctions and /chain to :8000
+
+The second still needs `deno task serve` running alongside it.
+
+**The browser builds its bid with the CLI's own code.** `web/src/chain.ts`
+imports `bid()` from `src/tx/bid.ts` and the schemas from `src/types.ts`
+unchanged, via a Vite alias (`@core` → `off-chain/src`). Only two things
+differ: the wallet is a CIP-30 extension rather than a seed phrase, and the
+provider is our own `/chain` proxy rather than Blockfrost directly. This is the
+point of not splitting the repo — a second transaction builder in a second
+runtime is exactly where a datum schema silently diverges by one constructor
+tag, and that failure surfaces on-chain after a fee has been paid, not at build
+time.
+
+Three things had to change in the shared code to make it importable by a
+browser, all small and all worth keeping:
+
+- `config.ts` reads env through one `envVar()` helper that checks for `Deno`
+  before touching it, and falls back to Vite's `import.meta.env` with a `VITE_`
+  prefix. A bare `Deno.env.get` at module scope crashes the bundle on load.
+- `blueprint.ts` gained `setBlueprint()`. The browser has no filesystem, so the
+  web app imports `plutus.json` as a module and hands it over at startup.
+  **A stale bundle carries a stale script hash** — rebuild the web app after
+  `make blueprint`, just as you re-run `deno task verify-lot`.
+- `web/src/deno-shim.d.ts` declares the handful of Deno globals the shared
+  modules use, so `tsc` can check browser code that imports them.
+
+**CIP-30 is a standard, so nothing is Eternl-specific.** The page lists
+whatever wallets injected themselves into `window.cardano` and sorts Eternl
+first. Lace, Nami, Flint, Typhon and Vespr satisfy the same interface. Wallets
+inject asynchronously, so `useWallet` polls briefly rather than reading once and
+concluding nothing is installed. `connect()` also compares
+`getNetworkId()` against the configured network, which turns a baffling "no
+auction UTxO" into a sentence naming the real problem.
+
+**The Blockfrost project id never reaches the browser.**
+`src/indexer/chain-proxy.ts` forwards `/chain/*` to Blockfrost, adding the
+`project_id` header server-side. This does not weaken the claim that the server
+cannot move money: a project id is a read-and-relay credential, and everything
+crossing the proxy toward the chain was signed in the user's wallet moments
+earlier. The proxy is a postbox, not an authority. Exposed to the internet it
+would want a path allowlist and its own rate limit; on localhost it does not.
+
+The web app covers **bid, settle and burn**, not just bidding:
+
+- **Settle** appears once bidding is over and anyone may press it. This is the
+  concrete face of "a blockchain has no scheduler": a validator is a predicate
+  that runs only when someone tries to spend the UTxO, so a finished auction
+  sits there, correct and unsettled, until a transaction arrives. The contract
+  guarantees *safety* (if it happens it is right), never *liveness* (that it
+  happens). A button costs nothing in trust, because whoever clicks it still
+  cannot make the transaction do anything the validator would reject. Contrast
+  a keeper bot, which would have to hold a key on the server and would break
+  the claim that the server can move no funds.
+- **Claim (burn)** is offered only when the connected wallet is both holder and
+  seller, because the burn needs both signatures on one transaction. When it is
+  two people the interface says so plainly and points at the CLI. That boundary
+  is a finding worth writing up: the contract is one click when one party, and
+  needs a protocol when two.
+
+Both reuse the CLI's `payout()` and `claim()` unchanged. Two shared pieces had
+to become runtime-neutral for that: `chainApiBase()` in `config.ts` (the CLI
+reads Blockfrost directly, the browser goes through `/chain`), and the minting
+policy's parameters, which live in `state/lot-*.json` and are now recorded on
+the `auctions` table so a browser can rebuild the policy without reading this
+machine's disk. That was the project's only schema migration, done with
+MariaDB's `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`.
+
+Build gotchas, both already resolved:
+
+- Lucid ships three WASM blobs, so Vite needs `vite-plugin-wasm`. The usual
+  companion `vite-plugin-top-level-await` is **not** used: it is incompatible
+  with the resolved `@swc/core` ("missing field `type`") and is unnecessary at
+  `target: "esnext"`, where top-level await is native. Lowering the target
+  brings the problem back.
+- `serve.ts` must send `.wasm` as `application/wasm`.
+  `WebAssembly.instantiateStreaming` refuses anything else, and the failure
+  looks like broken signing rather than a MIME problem.
+- **Lucid needs Node globals polyfilled, and says so badly.** Its dependency
+  tree (safe-buffer, readable-stream) reaches for `Buffer`, `process` and
+  `global` without importing them. The first symptom is
+  `Cannot read properties of undefined (reading 'from')` thrown from inside a
+  pre-bundled Lucid, which names nothing useful -- it is `safe-buffer` doing
+  `require("buffer")` and getting the externalised built-in, i.e. `undefined`.
+  Fixing that yields `process is not defined` next. Both are handled by
+  `web/src/polyfills.ts`, imported *first* in `main.tsx` because ES modules
+  evaluate depth-first in import order, plus a `buffer` alias in
+  `vite.config.ts` that must be an **absolute** path (a bare specifier is
+  re-resolved by the same alias and Vite refuses it).
+  This bites in `deno task web` and not always in `web:build`, so a working
+  production bundle is not evidence the dev server works. Test both.
+
+Verified by rendering **both** the dev server (:5173) and the built page
+(:8000) in headless Chromium: React mounts, the API is fetched, TESTLOT3
+renders with its bid history, and the console is clean in each.
+Signing itself needs a real wallet extension and has not been exercised
+head-lessly.
+
+## Accounts and sign-in by wallet (built 2026-09-06)
+
+`off-chain/src/app/` — accounts, profiles and verifiable history, on top of the
+same MariaDB the indexer uses. Endpoints are served by `deno task serve`
+alongside the read model.
+
+**The rule that decides where anything goes.** Ask: *if this row were deleted,
+forged, or edited by the operator, could anyone lose money?* Yes → on-chain.
+No → an ordinary table, and better there. Editing a product photo is a lie the
+operator's reputation pays for; editing a bid is theft. Only the second needs a
+ledger, and that sentence is the thesis argument in miniature.
+
+**Authentication is a wallet signature, not a password.** CIP-30 `signData`
+against a server-issued nonce:
+
+    POST /auth/nonce   {address}                        -> {nonce, payloadHex}
+    POST /auth/login   {address, nonce, signature, key} -> session cookie
+    GET  /auth/me                                       -> user + addresses
+    POST /auth/logout
+    PUT  /auth/profile {displayName, email, ...}
+    GET  /me/history                                    -> bids, from the chain
+
+Verification is `verifyData` from Lucid, which the CLI can produce signatures
+for identically — so a browser signature and a seed-phrase signature are
+indistinguishable to the server.
+
+Three things that must not be relaxed:
+
+- **The signed message is rebuilt server-side, never taken from the request.**
+  Verifying a client-supplied payload proves only that the client signed
+  *something*. It has to be our nonce, for that address.
+- **The nonce is single-use and expires** (5 min). `consumeNonce` does the check
+  and the mark-used in one `UPDATE ... WHERE used_at IS NULL`, so two
+  simultaneous attempts cannot both win. A SELECT-then-UPDATE would leave that
+  race open.
+- **The session cookie is HttpOnly / SameSite=Lax, with no `Secure`** because
+  the demo is http on localhost. Anything deployed publicly must add `Secure`
+  and be behind TLS.
+
+**An account is optional.** Connecting a wallet is enough to bid — bidding is a
+transaction the chain validates and the server is never consulted. Refusing the
+sign-in signature leaves everything working. The account only adds what the
+chain deliberately does not know.
+
+**History is a join, not a table.** `historyFor` joins `events` (derived from
+the chain) against `wallet_addresses`. Nothing about bids is stored twice. The
+consequence worth stating: a user's history here is *verifiable* against a
+public explorer, where on a conventional site it is whatever the operator's
+database says.
+
+**`wallet_addresses` is many-to-one on purpose.** A wallet holds several
+addresses — the base/enterprise distinction that caused the `PubKeyHash` defect
+— and each is proved by its own signature.
+
+**KYC never touches the chain.** A ledger is permanent, public and unfixable;
+personal data has to live where it can be corrected, access-controlled and
+*erased*. That is what makes a right-to-erasure request answerable, and it is
+the reason the split falls where it does — not a workaround.
+
+**Careful: `src/app/` tables are authoritative, not derived.** `deno task
+db:reset` rebuilds the indexer from the chain; accounts cannot be rebuilt from
+anything. It is safe because `dropAll()` only drops the three names in the
+indexer's own `TABLES`, so that list is now load-bearing. A second database
+would make the boundary structural rather than a convention.
+
+Verified end to end against real wallets: sign-in, replayed nonce rejected,
+signature from the wrong wallet rejected, session, profile update with
+validation, history, sign-out, and a second sign-in reusing the same account.
+
+### Still TODO — product metadata
+
+The remaining gap is that a lot is just a token name, which is why listings
+read as a demo. A `lots` table (`policy_id` PK, title, description, category,
+condition, image_url) joined onto `auctions` in the API would render "MacBook
+Pro 14-inch, 2023, excellent" with a photo instead of a hex string. The honest
+caveat to state alongside it: that metadata is operator-controlled — the chain
+guarantees the money, the operator describes the goods, exactly as with
+physical delivery.
+
+**Worth one paragraph rather than an implementation:** CIP-25 and CIP-68 put
+NFT metadata on-chain in the minting transaction, making the description as
+tamper-evident as the ownership. It costs fees per byte, cannot be corrected
+after minting, and is unusable for images — which is why real marketplaces do
+what is proposed above and pin images to IPFS with only the hash on-chain.
+Noticing the trade-off and choosing deliberately is worth more than building it.
 
 ## Open design questions for the thesis
 

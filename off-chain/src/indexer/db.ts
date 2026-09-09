@@ -47,6 +47,15 @@ export interface AuctionRow {
   endTime: number;
   status: "open" | "settled";
   network: string;
+  /**
+   * The UTxO whose consumption made the mint unrepeatable, and the seller's
+   * payment key hash. Both are parameters of the minting policy, so a client
+   * needs them to rebuild that policy and burn the token. Null for auctions
+   * registered before this was recorded, or whose lot file is missing.
+   */
+  seedTxHash: string | null;
+  seedOutputIndex: number | null;
+  sellerPkh: string | null;
 }
 
 /** One thing that happened to an auction, in chain order. */
@@ -89,6 +98,9 @@ const SCHEMA: string[] = [
      end_time        BIGINT       NOT NULL,
      status          ENUM('open','settled') NOT NULL DEFAULT 'open',
      network         VARCHAR(16)  NOT NULL,
+     seed_tx_hash      VARCHAR(64) NULL,
+     seed_output_index INT         NULL,
+     seller_pkh        VARCHAR(56) NULL,
      PRIMARY KEY (policy_id),
      UNIQUE KEY uniq_auction_address (address)
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
@@ -126,6 +138,13 @@ const SCHEMA: string[] = [
      CONSTRAINT fk_sync_auction FOREIGN KEY (policy_id)
        REFERENCES auctions (policy_id) ON DELETE CASCADE
    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`,
+  // For databases created before the minting-policy parameters were recorded.
+  // MariaDB supports IF NOT EXISTS here, so this is a no-op on a fresh schema
+  // and the only migration step this project needs.
+  `ALTER TABLE auctions
+     ADD COLUMN IF NOT EXISTS seed_tx_hash      VARCHAR(64) NULL,
+     ADD COLUMN IF NOT EXISTS seed_output_index INT         NULL,
+     ADD COLUMN IF NOT EXISTS seller_pkh        VARCHAR(56) NULL`,
 ];
 
 /** Tables in dependency order, so dropping them in reverse satisfies the keys. */
@@ -192,16 +211,20 @@ export async function dropAll(db: Db): Promise<void> {
 export async function upsertAuction(db: Db, a: AuctionRow): Promise<void> {
   await db.query(
     `INSERT INTO auctions
-       (policy_id, token_name, unit, address, seller_address, min_bid, end_time, status, network)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       (policy_id, token_name, unit, address, seller_address, min_bid, end_time, status,
+        network, seed_tx_hash, seed_output_index, seller_pkh)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON DUPLICATE KEY UPDATE
-       token_name     = VALUES(token_name),
-       unit           = VALUES(unit),
-       address        = VALUES(address),
-       seller_address = VALUES(seller_address),
-       min_bid        = VALUES(min_bid),
-       end_time       = VALUES(end_time),
-       network        = VALUES(network)`,
+       token_name        = VALUES(token_name),
+       unit              = VALUES(unit),
+       address           = VALUES(address),
+       seller_address    = VALUES(seller_address),
+       min_bid           = VALUES(min_bid),
+       end_time          = VALUES(end_time),
+       network           = VALUES(network),
+       seed_tx_hash      = COALESCE(VALUES(seed_tx_hash), seed_tx_hash),
+       seed_output_index = COALESCE(VALUES(seed_output_index), seed_output_index),
+       seller_pkh        = COALESCE(VALUES(seller_pkh), seller_pkh)`,
     [
       a.policyId,
       a.tokenName,
@@ -212,6 +235,9 @@ export async function upsertAuction(db: Db, a: AuctionRow): Promise<void> {
       a.endTime,
       a.status,
       a.network,
+      a.seedTxHash,
+      a.seedOutputIndex,
+      a.sellerPkh,
     ],
   );
 }
@@ -269,7 +295,10 @@ const AUCTION_COLUMNS = `policy_id      AS policyId,
                          min_bid        AS minBid,
                          end_time       AS endTime,
                          status         AS status,
-                         network        AS network`;
+                         network        AS network,
+                         seed_tx_hash      AS seedTxHash,
+                         seed_output_index AS seedOutputIndex,
+                         seller_pkh        AS sellerPkh`;
 
 export async function listAuctions(db: Db): Promise<AuctionRow[]> {
   const [rows] = await db.query<RowDataPacket[]>(

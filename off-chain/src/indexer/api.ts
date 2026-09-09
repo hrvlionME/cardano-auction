@@ -14,6 +14,13 @@
  *
  * Bidding therefore does not go through here. It goes through a wallet, and
  * `deno task bid` is the demonstration of that path.
+ *
+ * One thing here is *not* chain data: `name` beside a bidder's address. That
+ * comes from the accounts table and is decoration -- what this site happens to
+ * know about who controls an address. The address stays in every response
+ * alongside it, because the address is what the validator paid and what an
+ * explorer will confirm. Only a user's chosen display name is ever exposed;
+ * nothing else about an account is readable by another user.
  */
 import {
   type AuctionRow,
@@ -25,6 +32,7 @@ import {
   listEvents,
 } from "./db.ts";
 import { network } from "../config.ts";
+import { displayNames } from "../app/db.ts";
 
 /** Where an auction is in its life, derived rather than stored. */
 export type Phase = "bidding" | "closed" | "settled";
@@ -34,7 +42,7 @@ function phaseOf(a: AuctionRow, now = Date.now()): Phase {
   return now > a.endTime ? "closed" : "bidding";
 }
 
-async function summarise(db: Db, a: AuctionRow) {
+async function summarise(db: Db, a: AuctionRow, names: Record<string, string> = {}) {
   const lead = await highestBid(db, a.policyId);
   return {
     policyId: a.policyId,
@@ -50,6 +58,7 @@ async function summarise(db: Db, a: AuctionRow) {
     leader: lead
       ? {
         address: lead.bidderAddress,
+        name: lead.bidderAddress ? names[lead.bidderAddress] ?? null : null,
         amountLovelace: lead.amount,
         txHash: lead.txHash,
         at: new Date(lead.blockTime * 1000).toISOString(),
@@ -57,6 +66,19 @@ async function summarise(db: Db, a: AuctionRow) {
       : null,
     /** What the next bid must exceed: the standing bid, or the reserve. */
     nextBidMustExceedLovelace: lead?.amount ?? a.minBid - 1,
+    /**
+     * The minting policy's parameters, so a client can rebuild that policy and
+     * burn the token. All of it is public: the seed UTxO is a spent input
+     * anyone can read, and the key hash is the seller address's payment
+     * credential. Null when the lot predates this being recorded.
+     */
+    lot: a.seedTxHash && a.sellerPkh
+      ? {
+        seed: { txHash: a.seedTxHash, outputIndex: a.seedOutputIndex ?? 0 },
+        sellerPkh: a.sellerPkh,
+        tokenNameHex: a.unit.slice(a.policyId.length),
+      }
+      : null,
   };
 }
 
@@ -105,12 +127,17 @@ export async function handle(db: Db, req: Request): Promise<Response> {
   // GET /auctions
   if (parts.length === 1) {
     const rows = await listAuctions(db);
+    const leaders = await Promise.all(rows.map((a) => highestBid(db, a.policyId)));
+    const names = await displayNames(
+      db,
+      leaders.map((l) => l?.bidderAddress).filter((x): x is string => Boolean(x)),
+    );
     // Sequential rather than Promise.all: each summary runs two more queries,
     // and the pool holds four connections. Fanning out here would let one
     // request starve the sync loop of a connection for no useful speed-up on a
     // handful of auctions.
     const auctions = [];
-    for (const a of rows) auctions.push(await summarise(db, a));
+    for (const a of rows) auctions.push(await summarise(db, a, names));
     return json({ network, auctions });
   }
 
@@ -118,21 +145,30 @@ export async function handle(db: Db, req: Request): Promise<Response> {
   const auction = await getAuction(db, policyId);
   if (!auction) return json({ error: `No auction with policy id ${policyId}` }, 404);
 
-  const events = async () =>
-    (await listEvents(db, policyId)).map((e) => ({
+  const events = async () => {
+    const rows = await listEvents(db, policyId);
+    const names = await displayNames(
+      db,
+      rows.map((e) => e.bidderAddress).filter((x): x is string => Boolean(x)),
+    );
+    return rows.map((e) => ({
       kind: e.kind,
       txHash: e.txHash,
       outputIndex: e.outputIndex,
       blockHeight: e.blockHeight,
       at: new Date(e.blockTime * 1000).toISOString(),
       bidderAddress: e.bidderAddress,
+      bidderName: e.bidderAddress ? names[e.bidderAddress] ?? null : null,
       amountLovelace: e.amount,
       datum: e.datum,
     }));
+  };
 
   // GET /auctions/:policyId
   if (parts.length === 2) {
-    return json({ ...(await summarise(db, auction)), events: await events() });
+    const lead = await highestBid(db, policyId);
+    const names = await displayNames(db, lead?.bidderAddress ? [lead.bidderAddress] : []);
+    return json({ ...(await summarise(db, auction, names)), events: await events() });
   }
 
   // GET /auctions/:policyId/events

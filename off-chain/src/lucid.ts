@@ -4,6 +4,7 @@ import {
   bidderSeedPhrase,
   blockfrostProjectId,
   blockfrostUrl,
+  chainApiBase,
   network,
   walletSeedPhrase,
 } from "./config.ts";
@@ -81,9 +82,8 @@ export async function awaitUtxo(
  * A payout that is legal by the clock is therefore not yet legal by the chain.
  */
 export async function chainTipSlot(): Promise<number> {
-  const res = await fetch(`${blockfrostUrl()}/blocks/latest`, {
-    headers: { project_id: blockfrostProjectId() },
-  });
+  const { url, headers } = chainApiBase();
+  const res = await fetch(`${url}/blocks/latest`, { headers });
   if (!res.ok) throw new Error(`Blockfrost /blocks/latest returned ${res.status}`);
   const { slot } = await res.json() as { slot: number };
   return slot;
@@ -118,9 +118,8 @@ export async function awaitBurned(
 ): Promise<{ quantity: string; events: number }> {
   let last = { quantity: "?", events: 0 };
   for (let i = 0; i < tries; i++) {
-    const res = await fetch(`${blockfrostUrl()}/assets/${unit}`, {
-      headers: { project_id: blockfrostProjectId() },
-    });
+    const { url, headers } = chainApiBase();
+    const res = await fetch(`${url}/assets/${unit}`, { headers });
     if (res.ok) {
       const a = await res.json() as { quantity: string; mint_or_burn_count: number };
       last = { quantity: a.quantity, events: a.mint_or_burn_count };

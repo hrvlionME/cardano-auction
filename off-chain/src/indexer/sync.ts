@@ -22,7 +22,7 @@
 import { Data } from "@lucid-evolution/lucid";
 import { blockfrostProjectId, blockfrostUrl, network } from "../config.ts";
 import { AuctionDatum, fromPlutusAddress } from "../types.ts";
-import { type AuctionState, deserialiseParams } from "../state.ts";
+import { type AuctionState, deserialiseParams, type LotState } from "../state.ts";
 import { auctionAddress } from "../blueprint.ts";
 import {
   type AuctionRow,
@@ -94,6 +94,19 @@ export async function registerKnownAuctions(db: Db): Promise<AuctionRow[]> {
       continue;
     }
 
+    // The minting policy's parameters live in the lot file, not the auction
+    // file. They are needed to rebuild that policy and burn the token, so a
+    // client can offer to claim without reading this machine's disk. Absent is
+    // fine: only the burn needs them.
+    let lot: LotState | undefined;
+    try {
+      lot = JSON.parse(
+        await Deno.readTextFile(`state/lot-${saved.policyId}.json`),
+      ) as LotState;
+    } catch {
+      lot = undefined;
+    }
+
     const row: AuctionRow = {
       policyId: saved.policyId,
       tokenName: saved.tokenName,
@@ -104,6 +117,9 @@ export async function registerKnownAuctions(db: Db): Promise<AuctionRow[]> {
       endTime: Number(params.apEndTime),
       status: "open",
       network,
+      seedTxHash: lot?.seed.txHash ?? null,
+      seedOutputIndex: lot?.seed.outputIndex ?? null,
+      sellerPkh: lot?.sellerPkh ?? null,
     };
     await upsertAuction(db, row);
     registered.push(row);

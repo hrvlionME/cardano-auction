@@ -8,6 +8,10 @@ dist-newstyle/
 node_modules/
 .env
 
+# Built web bundle: reproduced by `deno task web:build`, and large (the Lucid
+# WASM blobs alone are ~4 MB).
+off-chain/web/dist/
+
 # editors
 .DS_Store
 *.swp

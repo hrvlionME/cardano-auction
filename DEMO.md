@@ -213,6 +213,71 @@ did not derive. It is documented at the top of `src/indexer/sync.ts`.
 
 ---
 
+## Part E — the web app
+
+This is the part to show a non-technical audience. Everything before it proves
+the contracts work; this makes that visible without a terminal.
+
+    cd off-chain
+    deno task web:build            # once, after any change to the Haskell
+    deno task serve --sync         # API + chain proxy + the page, one port
+
+Then open **http://localhost:8000/**.
+
+While developing, `deno task web` instead gives a Vite dev server on :5173 with
+hot reload, proxying to :8000 — but for a demo use the single port, because
+there is one thing to start and one thing that can fail.
+
+### Connecting a wallet
+
+The page lists whatever CIP-30 wallets the browser has and puts Eternl first.
+**Nothing here is Eternl-specific** — CIP-30 is the standard every Cardano
+browser wallet implements, and Lace, Nami, Flint, Typhon and Vespr all satisfy
+the same interface. Set the wallet to **Preview** before connecting; if it is on
+mainnet the page says so plainly instead of failing later with something
+cryptic.
+
+Import one of the bidder seed phrases from `off-chain/.env` into a fresh Eternl
+profile to bid as bidder 1 or 2.
+
+### What to say while it is on screen
+
+**"The page cannot spend anything."** Pressing *Place bid* builds a transaction
+and hands it to the wallet, which shows it to you and waits. Refuse it and
+nothing happens. The private key never leaves the extension, and the page never
+sees it.
+
+**"The server cannot spend anything either."** It holds the Blockfrost key, so
+the browser never has to — but a Blockfrost key reads the chain and relays
+already-signed transactions. It cannot sign. There is no private key anywhere in
+this system except inside the wallet.
+
+**"This is the same code the command line runs."** The browser imports `bid()`
+from `src/tx/bid.ts` — the same function, same Plutus schemas, same parameter
+application. Only the wallet and the provider differ. That matters because a
+second transaction builder is exactly where a datum schema drifts by one
+constructor tag, and that failure appears on-chain after a fee, not at build
+time.
+
+**The lag is honest, so narrate it.** After a bid the page shows *"on its way to
+the chain"* and does not update for up to a minute. That is not a bug: the page
+reads the chain, and the chain has to mint a block before there is anything to
+read. A conventional site would show the bid instantly because its own database
+recorded it — which is precisely the thing this design refuses to do.
+
+### The demonstration that lands
+
+Have a terminal beside the browser. Run:
+
+    deno task bid 11 --as 1 <prefix>
+
+and say nothing. The page updates on its own a few seconds later. The browser
+was never told; it read the chain. Two completely different clients — a CLI with
+a seed phrase and a browser with a wallet extension — writing to one ledger and
+both seeing the same truth.
+
+---
+
 ## What to claim, and what not to
 
 Be precise about the boundary; it is the sort of thing an examiner will push on.

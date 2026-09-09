@@ -22,14 +22,35 @@ interface BlueprintValidator {
   hash: string;
 }
 
-interface Blueprint {
+export interface Blueprint {
   validators: BlueprintValidator[];
 }
 
 let cached: Blueprint | undefined;
 
+/**
+ * Supply the blueprint directly instead of reading it from disk.
+ *
+ * The browser has no filesystem, so the web app imports `plutus.json` as a
+ * module -- Vite inlines it at build time -- and hands it here before building
+ * any transaction. Everything downstream (parameter application, address
+ * derivation, script attachment) is then identical to the CLI's, which is the
+ * point: both halves must apply the same parameters to the same bytecode or
+ * they compute different addresses and neither notices until a transaction
+ * fails on-chain.
+ */
+export function setBlueprint(bp: Blueprint): void {
+  cached = bp;
+}
+
 export async function loadBlueprint(): Promise<Blueprint> {
   if (cached) return cached;
+  if (typeof Deno === "undefined") {
+    throw new Error(
+      "No blueprint available. In the browser it must be supplied with " +
+        "setBlueprint() before any transaction is built.",
+    );
+  }
   let raw: string;
   try {
     raw = await Deno.readTextFile(BLUEPRINT_PATH);

@@ -21,7 +21,10 @@
     "serve": "deno run -A scripts/serve.ts",
     "info": "deno run -A scripts/info.ts",
     "verify-lot": "deno run -A scripts/verify-lot.ts",
-    "db:reset": "deno run -A scripts/db-reset.ts"
+    "db:reset": "deno run -A scripts/db-reset.ts",
+    "web": "deno task --cwd web dev",
+    "web:build": "deno task --cwd web build",
+    "web:check": "deno task --cwd web check"
   },
   "imports": {
     "@lucid-evolution/lucid": "npm:@lucid-evolution/lucid@^0.6.2",
