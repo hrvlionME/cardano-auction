@@ -75,6 +75,23 @@ export const hasBidderWallet = () => bidderIndices().length > 0;
  * asset's supply) has to go through here, or it works on the command line and
  * throws "Missing BLOCKFROST_PROJECT_ID" in a browser.
  */
+/**
+ * How this site names itself in anything a user is asked to sign.
+ *
+ * An origin rather than a brand, for two reasons. The interface no longer has a
+ * wordmark, so there is no name to match; and an origin is the one identifier a
+ * user can *check* -- it is what their browser is already showing them in the
+ * URL bar, where a brand name is just a string the page chose.
+ *
+ * **Read from the server's own configuration, never from the request.** The
+ * whole point of naming the site in a signed message is that a signature
+ * collected here cannot be presented elsewhere as a login to something else. A
+ * server that took this from the incoming Host header would let whoever
+ * controls that header decide what the user appears to be signing, which gives
+ * the check away for nothing.
+ */
+export const siteOrigin = () => envVar("SITE_ORIGIN") ?? "http://localhost:8000";
+
 export function chainApiBase(): { url: string; headers: Record<string, string> } {
   if (typeof Deno === "undefined") {
     return { url: `${globalThis.location.origin}/chain`, headers: {} };

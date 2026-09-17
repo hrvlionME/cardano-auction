@@ -71,10 +71,6 @@ export function getAuction(policyId: string): Promise<AuctionDetail> {
   return get<AuctionDetail>(`/auctions/${policyId}`);
 }
 
-export const ada = (lovelace: number | bigint | null | undefined): string =>
-  lovelace === null || lovelace === undefined
-    ? "--"
-    : (Number(lovelace) / 1_000_000).toLocaleString(undefined, {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 6,
-    });
+// Re-exported rather than defined twice. Two formatters that drift by one
+// decimal place would show two different prices for one bid.
+export { ada } from "./format.ts";

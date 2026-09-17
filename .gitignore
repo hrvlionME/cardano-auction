@@ -24,3 +24,8 @@ off-chain/state/
 # The indexer's data now lives in MariaDB, not in the repo. It is derived from
 # the chain and rebuildable with `deno task db:reset`, so nothing here is worth
 # committing or backing up.
+
+# Photographs sellers upload. Operator-held content, not source: the files are
+# named by the SHA-256 of their own bytes and referenced from the `lots` table,
+# so a checkout without them renders placeholders rather than breaking.
+off-chain/uploads/

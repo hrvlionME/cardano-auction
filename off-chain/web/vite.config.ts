@@ -48,6 +48,12 @@ export default defineConfig({
   define: { global: "globalThis" },
   server: {
     port: 5173,
+    // Listen on every interface, as `deno task serve` already does. Vite's
+    // default is loopback only, which is invisible until the browser is not on
+    // this machine -- a VM, WSL, or an SSH tunnel -- and then :8000 works while
+    // :5173 refuses the connection, which looks like a broken app rather than a
+    // binding. This is the development server only; it is never deployed.
+    host: true,
     proxy: {
       "/health": API,
       "/auctions": API,
@@ -58,6 +64,8 @@ export default defineConfig({
       // JSON. Any new server route needs a line here.
       "/auth": API,
       "/me": API,
+      "/lots": API,
+      "/uploads": API,
     },
   },
   // esnext because the WASM initialisation above is a top-level await, which

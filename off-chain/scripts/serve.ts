@@ -11,6 +11,9 @@
  *   /auth/…, /me/…        accounts: sign-in by wallet signature, profile and
  *                         verifiable history. These write, but only to the
  *                         application's own tables -- see src/app/api.ts.
+ *   /lots/…               listings: what the operator says is in the box, and
+ *                         the registry that tells the indexer an auction exists.
+ *   /uploads/…            the photographs, addressed by the hash of their bytes.
  *   /chain/…              a Blockfrost pass-through, so the browser never sees
  *                         the project id. Relays signed transactions; cannot
  *                         sign. See src/indexer/chain-proxy.ts.
@@ -25,6 +28,7 @@ import { handle } from "../src/indexer/api.ts";
 import { APP_PATHS, handleApp } from "../src/app/api.ts";
 import { ensureAppSchema } from "../src/app/db.ts";
 import { CHAIN_PREFIX, proxyChain } from "../src/indexer/chain-proxy.ts";
+import { readUpload, UPLOAD_PREFIX } from "../src/app/uploads.ts";
 import { syncAll } from "../src/indexer/sync.ts";
 import { network } from "../src/config.ts";
 import { friendlyErrors } from "../src/cli.ts";
@@ -125,6 +129,11 @@ Deno.serve({ port, onListen: () => {} }, async (req) => {
   }
   if (API_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return await handle(db, req);
+  }
+  // Photographs of the goods. Before the web app, because these are real files
+  // with extensions and would otherwise fall through to the index.html route.
+  if (pathname.startsWith(UPLOAD_PREFIX)) {
+    return await readUpload(pathname) ?? new Response("Not found", { status: 404 });
   }
   const file = await webFile(pathname, req.method);
   if (file) return file;

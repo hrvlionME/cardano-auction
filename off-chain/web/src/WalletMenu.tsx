@@ -1,0 +1,127 @@
+/**
+ * Connecting, and signing in, from the header.
+ *
+ * There is no separate sign-in page, because there is no separate sign-in
+ * *step* for most of what this site does. The two actions are genuinely
+ * different in kind and the menu keeps them apart:
+ *
+ *   **Connect** grants this page read access and the right to *ask* for a
+ *   signature. It hands over no keys. It is all that bidding, settling and
+ *   burning require, and none of those consult this server at all.
+ *
+ *   **Sign in** proves control of an address to the server, once, so it can
+ *   remember a name and a delivery address. It authorises no payment. It is
+ *   optional, and everything above keeps working without it.
+ *
+ * So connecting never asks for a signature, and the session lasts a month: a
+ * prompt the user sees constantly is a prompt they stop reading, which is the
+ * one habit worth not building when the whole argument is that they can read
+ * what they sign.
+ */
+import { useEffect, useRef, useState } from "react";
+import { NavLink } from "react-router-dom";
+import { useSession } from "./session.tsx";
+import { short } from "./format.ts";
+import { Spinner } from "./ui.tsx";
+
+export default function WalletMenu() {
+  const {
+    wallets,
+    conn,
+    me,
+    connecting,
+    signingIn,
+    connectWallet,
+    signIn,
+    disconnect,
+    signOut,
+  } = useSession();
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+
+  // Close on a click elsewhere or on Escape, which is what anyone tries.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => {
+      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
+    };
+    const key = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", key);
+    };
+  }, [open]);
+
+  async function pick(key: string) {
+    setOpen(false);
+    await connectWallet(key);
+  }
+
+  // ------------------------------------------------- signed in: name and menu
+  if (me.user) {
+    return (
+      <div className="who" ref={box}>
+        <NavLink className="badge" to="/account">
+          {me.user.displayName ?? short(me.address ?? "", 10, 5)}
+        </NavLink>
+        <button className="link" onClick={() => void signOut()}>sign out</button>
+      </div>
+    );
+  }
+
+  // ------------------------------- connected, no account: bidding already works
+  if (conn) {
+    return (
+      <div className="who" ref={box}>
+        <span className="badge mono" title={conn.address}>{short(conn.address, 10, 5)}</span>
+        <button className="btn small" disabled={signingIn} onClick={() => void signIn()}>
+          {signingIn ? <><Spinner /> signing…</> : "Sign in"}
+        </button>
+        <button className="link" onClick={disconnect}>disconnect</button>
+      </div>
+    );
+  }
+
+  // --------------------------------------------------------- not connected yet
+  return (
+    <div className="walletmenu" ref={box}>
+      <button
+        className="btn small primary"
+        disabled={connecting}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {connecting ? <><Spinner /> connecting…</> : "Connect wallet"}
+      </button>
+
+      {open && (
+        <div className="dropdown">
+          {wallets.length === 0
+            ? (
+              <div className="dropnote">
+                <strong>No wallet detected.</strong>
+                Eternl, Lace, Nami, Flint, Typhon and Vespr all satisfy CIP-30 — nothing here is
+                specific to one. Extensions inject themselves as the page loads, so reload if you
+                have just installed one.
+              </div>
+            )
+            : (
+              <>
+                {wallets.map((w) => (
+                  <button key={w.key} className="dropitem" onClick={() => void pick(w.key)}>
+                    {w.icon ? <img src={w.icon} alt="" /> : <span className="noicon" />}
+                    <span>{w.name}</span>
+                  </button>
+                ))}
+                <div className="dropnote">
+                  Connecting hands over no keys. It lets this page ask your wallet to sign, and
+                  you see and approve every transaction. An account is separate and optional.
+                </div>
+              </>
+            )}
+        </div>
+      )}
+    </div>
+  );
+}

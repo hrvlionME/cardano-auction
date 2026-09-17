@@ -80,6 +80,24 @@ export function availableWallets(): AvailableWallet[] {
     .sort((a, b) => (a.key === "eternl" ? -1 : b.key === "eternl" ? 1 : a.name.localeCompare(b.name)));
 }
 
+/**
+ * Has this wallet already granted this page access?
+ *
+ * CIP-30 wallets remember an authorisation per origin, so a page that was
+ * connected before can call `enable()` again without the user seeing a prompt.
+ * Asking this first is what makes reconnecting on page load silent rather than
+ * a dialog on every reload.
+ */
+export async function alreadyEnabled(key: string): Promise<boolean> {
+  const entry = registry()[key];
+  if (!entry) return false;
+  try {
+    return await entry.isEnabled();
+  } catch {
+    return false;
+  }
+}
+
 export class WalletError extends Error {}
 
 /** Ask a wallet for permission and return its API. */

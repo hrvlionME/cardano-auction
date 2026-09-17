@@ -24,10 +24,12 @@ import { blockfrostProjectId, blockfrostUrl, network } from "../config.ts";
 import { AuctionDatum, fromPlutusAddress } from "../types.ts";
 import { type AuctionState, deserialiseParams, type LotState } from "../state.ts";
 import { auctionAddress } from "../blueprint.ts";
+import { registerStoredListings } from "../app/lots.ts";
 import {
   type AuctionRow,
   type Db,
   getCursor,
+  listAuctions,
   insertEvent,
   setCursor,
   setStatus,
@@ -201,7 +203,21 @@ export async function syncAuction(db: Db, a: AuctionRow): Promise<number> {
 }
 
 export async function syncAll(db: Db): Promise<{ auctions: number; events: number }> {
-  const auctions = await registerKnownAuctions(db);
+  // Two registries, and the difference is the same one twice: an auction's
+  // compile-time parameters cannot be recovered from the chain, because the
+  // ledger stores the *hash* of the applied script rather than what produced
+  // it. So somebody has to have written them down.
+  //
+  //   state/*.json   what the CLI wrote on this machine
+  //   lots.registration   what a seller submitted through the web app
+  //
+  // Both are replayed on every sync, and both are re-derived rather than
+  // trusted. Syncing only what the first call returned would leave every
+  // browser-created auction permanently at zero bids -- correct on the chain,
+  // invisible in the interface.
+  await registerKnownAuctions(db);
+  await registerStoredListings(db);
+  const auctions = await listAuctions(db);
   let events = 0;
   for (const a of auctions) {
     const n = await syncAuction(db, a);

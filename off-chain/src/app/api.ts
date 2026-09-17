@@ -27,7 +27,8 @@
  * that bids, so an account and its bidder cannot drift apart.
  */
 import { getAddressDetails, verifyData } from "@lucid-evolution/lucid";
-import type { Db } from "../indexer/db.ts";
+import { siteOrigin } from "../config.ts";
+import { type Db, getAuction } from "../indexer/db.ts";
 import {
   addressesOf,
   consumeNonce,
@@ -38,14 +39,28 @@ import {
   issueNonce,
   linkAddress,
   type ProfilePatch,
+  ownsAddress,
   purgeNonces,
   SESSION_TTL_MS,
   sessionUser,
   updateProfile,
   userByAddress,
 } from "./db.ts";
+import {
+  allLots,
+  getLot,
+  type ListingSubmission,
+  LOT_CATEGORIES,
+  LOT_CONDITIONS,
+  type LotPatch,
+  RegistrationError,
+  registerListing,
+  setLotImage,
+  upsertLot,
+} from "./lots.ts";
+import { ACCEPTED_IMAGE_TYPES, MAX_IMAGE_BYTES, saveImage, UploadError } from "./uploads.ts";
 
-export const APP_PATHS = ["/auth", "/me"];
+export const APP_PATHS = ["/auth", "/me", "/lots"];
 
 const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body, null, 2), {
@@ -61,12 +76,14 @@ const hex = (s: string) =>
  *
  * Readable on purpose: the user sees this in Eternl before approving, and a
  * prompt showing opaque hex teaches people to approve things they have not
- * read. It names the site so a signature collected here cannot be presented
- * elsewhere as a login to something else.
+ * read. It names the site -- by origin, see `siteOrigin` -- so that a signature
+ * collected here cannot be presented elsewhere as a login to something else,
+ * and so that what the user is asked to trust is the address bar rather than a
+ * brand name any page can print.
  */
 export function signInMessage(address: string, nonce: string): string {
   return [
-    "Cardano Auction - sign in",
+    `Sign in to ${siteOrigin()}`,
     "",
     "Signing this proves you control this address.",
     "It authorises no payment and moves no funds.",
@@ -229,6 +246,111 @@ export async function handleApp(db: Db, req: Request): Promise<Response> {
     const who = await current(db, req);
     if (!who) return json({ error: "Not signed in." }, 401);
     return json({ history: await historyFor(db, who.user.id) });
+  }
+
+  // ----------------------------------------------------------------- lots
+  //
+  // Listings: what the operator says is in the box, and the registry that tells
+  // the indexer an auction exists at all. Everything written here is checked --
+  // see src/app/lots.ts -- but none of it can move a lovelace, so the claim
+  // that this server cannot spend for you survives unchanged.
+
+  // GET /lots -- every listing, for a client that merges them with /auctions.
+  //
+  // Served separately rather than joined into the read model on purpose. The
+  // read model projects the chain; this projects the operator. Keeping them two
+  // responses keeps the boundary visible in the API surface instead of blurring
+  // it into one object where a reader cannot tell which half a ledger
+  // guarantees.
+  if (pathname === "/lots" && req.method === "GET") {
+    return json({ lots: await allLots(db), categories: LOT_CATEGORIES, conditions: LOT_CONDITIONS });
+  }
+
+  // POST /lots -- register a freshly opened auction and describe it.
+  if (pathname === "/lots" && req.method === "POST") {
+    const who = await current(db, req);
+    if (!who) return json({ error: "Not signed in." }, 401);
+    const sub = await body<ListingSubmission>(req);
+    if (!sub) return json({ error: "Expected a JSON body." }, 400);
+    try {
+      const row = await registerListing(
+        db,
+        sub,
+        who.user.id,
+        (address) => ownsAddress(db, who.user.id, address),
+      );
+      return json({ ok: true, auction: row, lot: await getLot(db, row.policyId) }, 201);
+    } catch (e) {
+      if (e instanceof RegistrationError) return json({ error: e.message }, 400);
+      throw e;
+    }
+  }
+
+  if (pathname.startsWith("/lots/")) {
+    const rest = pathname.slice("/lots/".length).split("/").filter(Boolean);
+    const policyId = rest[0];
+    if (!policyId || !/^[0-9a-f]{56}$/.test(policyId)) {
+      return json({ error: "That is not a policy id." }, 400);
+    }
+
+    // GET /lots/:policyId
+    if (rest.length === 1 && req.method === "GET") {
+      const lot = await getLot(db, policyId);
+      return lot ? json(lot) : json({ error: "No listing for that policy id." }, 404);
+    }
+
+    // Everything below writes, and only the seller may. "Seller" is not a role
+    // this server assigns: it is the address the auction's compiled parameters
+    // will pay, which the caller must have proved control of by signature.
+    const who = await current(db, req);
+    if (!who) return json({ error: "Not signed in." }, 401);
+
+    const auction = await getAuction(db, policyId);
+    if (!auction) return json({ error: "No auction with that policy id." }, 404);
+    if (!await ownsAddress(db, who.user.id, auction.sellerAddress)) {
+      return json({ error: "Only the seller of this lot can change its listing." }, 403);
+    }
+
+    // PUT /lots/:policyId -- edit the description.
+    if (rest.length === 1 && req.method === "PUT") {
+      const patch = await body<LotPatch>(req);
+      if (!patch) return json({ error: "Expected a JSON body." }, 400);
+      try {
+        await upsertLot(db, policyId, patch, who.user.id);
+      } catch (e) {
+        if (e instanceof RegistrationError) return json({ error: e.message }, 400);
+        throw e;
+      }
+      return json(await getLot(db, policyId));
+    }
+
+    // POST /lots/:policyId/image -- upload a photograph.
+    if (rest.length === 2 && rest[1] === "image" && req.method === "POST") {
+      let file: File | null = null;
+      try {
+        const form = await req.formData();
+        const field = form.get("image");
+        if (field instanceof File) file = field;
+      } catch {
+        return json({ error: "Expected a multipart form with an `image` field." }, 400);
+      }
+      if (!file) return json({ error: "No `image` field in that upload." }, 400);
+      if (file.size > MAX_IMAGE_BYTES) {
+        return json({ error: `That image is larger than ${MAX_IMAGE_BYTES / 1024 / 1024} MB.` }, 413);
+      }
+      try {
+        const saved = await saveImage(new Uint8Array(await file.arrayBuffer()));
+        await setLotImage(db, policyId, saved.url);
+        return json({ ...saved, accepted: ACCEPTED_IMAGE_TYPES });
+      } catch (e) {
+        if (e instanceof UploadError || e instanceof RegistrationError) {
+          return json({ error: e.message }, 400);
+        }
+        throw e;
+      }
+    }
+
+    return json({ error: `No such path: ${pathname}` }, 404);
   }
 
   return json({ error: `No such path: ${pathname}` }, 404);

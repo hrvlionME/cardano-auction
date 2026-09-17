@@ -367,6 +367,7 @@ ledger, and that sentence is the thesis argument in miniature.
 against a server-issued nonce:
 
     POST /auth/nonce   {address}                        -> {nonce, payloadHex}
+                       (payload: "Sign in to <SITE_ORIGIN>" + nonce)
     POST /auth/login   {address, nonce, signature, key} -> session cookie
     GET  /auth/me                                       -> user + addresses
     POST /auth/logout
@@ -381,7 +382,15 @@ Three things that must not be relaxed:
 
 - **The signed message is rebuilt server-side, never taken from the request.**
   Verifying a client-supplied payload proves only that the client signed
-  *something*. It has to be our nonce, for that address.
+  *something*. It has to be our nonce, for that address. The same applies to
+  the *name* in it: since 2026-09-16 the message reads `Sign in to
+  <SITE_ORIGIN>` rather than naming a brand, and `siteOrigin()` reads the
+  server's own configuration and never the incoming Host header. Naming the
+  site is what stops a signature collected here being replayed as a login
+  elsewhere, and that only works if the server decides the name. An origin also
+  beats a brand for a second reason: it is the one identifier the user can check
+  against their own address bar, where a brand name is a string any page can
+  print. Set `SITE_ORIGIN` before putting the app behind a domain.
 - **The nonce is single-use and expires** (5 min). `consumeNonce` does the check
   and the mark-used in one `UPDATE ... WHERE used_at IS NULL`, so two
   simultaneous attempts cannot both win. A SELECT-then-UPDATE would leave that
@@ -420,22 +429,229 @@ Verified end to end against real wallets: sign-in, replayed nonce rejected,
 signature from the wrong wallet rejected, session, profile update with
 validation, history, sign-out, and a second sign-in reusing the same account.
 
-### Still TODO — product metadata
+## Listings, selling from the browser, and the UI rebuild (2026-09-16)
 
-The remaining gap is that a lot is just a token name, which is why listings
-read as a demo. A `lots` table (`policy_id` PK, title, description, category,
-condition, image_url) joined onto `auctions` in the API would render "MacBook
-Pro 14-inch, 2023, excellent" with a photo instead of a hex string. The honest
-caveat to state alongside it: that metadata is operator-controlled — the chain
-guarantees the money, the operator describes the goods, exactly as with
-physical delivery.
+The app stopped being a demo harness and became something a mentor can be shown
+without narration. Three things landed together.
 
-**Worth one paragraph rather than an implementation:** CIP-25 and CIP-68 put
-NFT metadata on-chain in the minting transaction, making the description as
-tamper-evident as the ownership. It costs fees per byte, cannot be corrected
-after minting, and is unusable for images — which is why real marketplaces do
-what is proposed above and pin images to IPFS with only the hash on-chain.
-Noticing the trade-off and choosing deliberately is worth more than building it.
+### Product metadata — done
+
+`lots` table (`policy_id` PK, title, description, category, condition,
+image_url, created_by, registration) in **`src/app/lots.ts`**, served at
+`/lots`. It is *not* joined into `/auctions`: the two come back as two
+responses and the browser merges them, so the boundary between "the chain
+guarantees this" and "the operator says this" stays visible in the API surface
+instead of blurring into one object.
+
+Images are in **`src/app/uploads.ts`**, on disk under `off-chain/uploads/`,
+served at `/uploads/<sha256>.<ext>`. Two properties, both security rather than
+tidiness: **content-addressed**, so no uploader ever chooses a filename (no
+traversal, no collision, free dedup), and **sniffed, not declared** — the type
+comes from the leading bytes, because serving a file as whatever it claims to
+be is how an "image" upload becomes stored XSS. SVG is refused: it is script.
+
+Who may edit is not an operator decision. There is no seller role and no owner
+column: `ownsAddress()` asks whether the account has proved control of the
+address the compiled script will pay. **The right to describe the goods follows
+from a fact on the chain.**
+
+The caveat to state in the thesis is unchanged and should be stated plainly:
+this metadata is operator-controlled. CIP-25/CIP-68 would put it in the minting
+transaction and make it as tamper-evident as the ownership, at the cost of fees
+per byte, no corrections ever, and no images. Real marketplaces do what this
+does and pin images elsewhere. Choosing deliberately is the contribution.
+
+### Selling from the browser — done
+
+`web/src/pages/Sell.tsx`. **Two transactions, and they have to be two:** the
+auction validator is parameterised by the lot's CurrencySymbol, which *is* the
+minting policy's hash, which depends on the seed UTxO the mint consumes — so
+there is no auction address to compute until the token exists. The wizard shows
+that rather than hiding it behind one spinner.
+
+Both transactions are `mintLot()` and `openAuction()` from `src/tx/`,
+**unchanged**. The only differences from the CLI are the wallet (CIP-30 rather
+than a seed phrase) and the provider (`/chain` rather than Blockfrost).
+
+New shared helper: **`awaitWalletAsset()` in `src/lucid.ts`.** The stale-read
+gotcha below is invisible on the CLI, where minting and opening are two
+commands run minutes apart, and bites *every time* in a browser that does both
+back to back — `openAuction` refuses a lot that demonstrably exists. Waits for
+the wallet to agree it holds the token.
+
+Step three is `POST /lots`, and it is the interesting one. **Nothing submitted
+is believed:** `registerListing` recomputes the minting policy from its
+parameters and checks the policy id, recomputes the script address from its
+parameters and checks it matches, checks the caller proved control of the
+seller address, and then asks the chain whether the opening transaction really
+put that token there. A client that lies fails all four. If step three fails
+the auction is still open and correct on-chain and only missing from the index
+— which is exactly what the error message says.
+
+### Two changes to the indexer, both forced
+
+- `syncAll` now syncs **every row in `auctions`**, not only what
+  `registerKnownAuctions` just read off disk. Without it a browser-created
+  auction sits at zero bids forever: correct on the chain, invisible in the UI.
+- It also calls `registerStoredListings()`. **`db:reset` drops `auctions`, and
+  an auction's compile-time parameters cannot be recovered from the chain** —
+  the ledger stores the *hash* of the applied script, not what produced it. So
+  a browser-created auction needed somewhere authoritative to live, exactly as
+  a CLI one lives in `state/`. That is the `lots.registration` column, replayed
+  and re-derived on every sync. `lots` is deliberately absent from the
+  indexer's `TABLES` and has no FK to `auctions`, or the reset would cascade
+  every title and photograph away.
+
+### The UI
+
+`react-router` and real URLs: `/`, `/auction/:policyId`, `/sell`, `/account`. `App.tsx` went from 620 lines doing everything to a shell plus
+`pages/` and small components. Wallet-and-account state moved into one
+`session.tsx` context — and the two are kept separate on purpose, because
+`conn && !me.user` (connected, able to bid, declining to be known) is the state
+worth demonstrating, not an edge case to tolerate.
+
+**There is no sign-in page, and connecting never asks for a signature.** The
+first cut had both, and both were wrong. `connectWallet` used to call `signIn`
+straight afterwards, which meant two prompts in a row *and* a signature prompt
+on every connect even when the browser already held a valid session. Signing
+something you have already signed teaches people to click through prompts
+without reading them — precisely the habit to avoid when the argument is that
+they *can* read what they sign.
+
+So the two actions are kept apart, in a header dropdown (`WalletMenu.tsx`):
+
+- **Connect** grants read access and the right to *ask* for a signature. No
+  keys change hands. It is all that bidding, settling and burning need, and
+  none of them consult this server.
+- **Sign in** is separate, explicit, and optional — one signature, then a
+  30-day session (was 7 days; `SESSION_TTL_MS`).
+
+**No wordmark.** The header is the ₳ mark alone — `aria-label="Home"` on the
+link, because a screen reader announcing "link, ₳" is not an accessible name.
+The tab is titled "Auction". Removing the words is what forced the signed
+message onto an origin: there was no longer a name for it to match, and an
+origin is the better identifier anyway.
+
+**The footer is pinned to the bottom of the window**, and the fix is worth
+remembering because the obvious version does not work. React mounts into
+`#root`, so `#root` is `body`'s only child — making `body` a flex column pushes
+nothing down, because header, main and footer are *grandchildren* and never
+become flex items. The column has to be declared on `#root`. Verified at
+1280x900: on the homepage and on a 404 the footer sits at exactly the viewport
+height with no scrollbar; on a long auction page it flows past, as it should.
+
+The last-used wallet key goes in `localStorage` (the key only — never an
+address or a session), and on load `alreadyEnabled()` asks the extension
+whether it still has the origin authorised before calling `enable()`. A wallet
+that already trusts the page reconnects with no dialog at all; one that has
+revoked access is simply not reconnected, silently, because the user did not
+ask for one.
+
+The footer states which properties are decentralized and which are not — same
+table as below, in the interface where a user reads it.
+
+### Verified 2026-09-16
+
+Server side, against the real database and real wallets, by signing in from the
+CLI — which produces signatures a browser signature is indistinguishable from,
+so this exercises the same code path Eternl does:
+
+- seller session issued; listing metadata written and read back
+- unknown category rejected (400); unauthenticated write rejected (401)
+- **non-seller write rejected (403)** — signed in as bidder 1, refused on an
+  auction sold by the seller wallet
+- image stored content-addressed, served as `image/png`, cached immutably
+- **HTML declared as `image/png` rejected**, because the check reads the bytes
+- `/uploads/../../.env` → 404
+- registration with invented parameters rejected, naming the currency symbol it
+  re-derived versus the one claimed
+
+Rendered in headless Chromium over CDP, **both** the built bundle on :8000 and
+the Vite dev server on :5173 — a working production bundle is not evidence the
+dev server works, so test both: `/`, `/sell`, `/auction/:policyId` and an
+unknown path all mount, fetch, and render; the header wallet dropdown opens and
+lists what is installed; a 30-day session cookie is accepted repeatedly with no
+further signature; uploaded photographs load;
+the built page's console is **clean**. The dev server still logs four
+`Module "events"/"util" has been externalized` warnings from Lucid's dependency
+tree, which predate this work.
+
+Two console fixes worth keeping: the favicon is an inlined SVG data URI in
+`index.html` (the browser asks for `/favicon.ico` unprompted, and that 404 was
+the only line in an otherwise clean console), and `BrowserRouter` opts into
+`v7_startTransition` and `v7_relativeSplatPath` rather than carrying two
+deprecation warnings — the second matters, because `/account/*` is a splat
+route with nested tabs.
+
+### Reaching the dev server
+
+This machine is a VirtualBox guest on NAT (`10.0.2.15` via `10.0.2.2`), so the
+host reaches it only through port-forward rules. Vite defaults to binding
+loopback only, which made :5173 unreachable while :8000 (bound `0.0.0.0` by
+`serve.ts`) worked — it looks like a broken app rather than a binding. Fixed
+with `host: true` in `vite.config.ts`, matching what the API server already
+does. Development only; never deployed.
+
+**The dev server is optional.** `deno task serve` serves the built bundle on
+:8000, and `deno task web:build` refreshes it. :5173 only buys hot reload, and
+needs its own forward rule.
+
+**Not yet exercised: the sell wizard end to end.** It needs a real wallet
+extension to sign, which headless Chromium has none of. The two transactions it
+builds are `mintLot()` and `openAuction()` unchanged, both proven on-chain many
+times from the CLI; what is unproven is the browser sequencing them back to
+back, which is exactly what `awaitWalletAsset()` exists for. **Rehearse it on a
+throwaway lot, not on LAPTOP.**
+
+## The title problem — "decentralized" over-claims (raised 2026-09-09)
+
+The thesis title says **decentralized auction platform**. The system is not
+decentralized; it is decentralized in the parts that matter most and
+centralized in several that also matter. Left unqualified, that is a claim the
+work cannot fully support, and an examiner will find it.
+
+| Property | Status | Why |
+|---|---|---|
+| Custody of funds | decentralized | nobody, operator included, can seize a bid |
+| Settlement | decentralized | the validator decides, not the server |
+| Verification | decentralized | anyone can index the chain and check the operator |
+| Auction rules | decentralized | enforced on-chain |
+| Discovery | **centralized** | compile-time params ⇒ the indexer must be *told* about an auction |
+| Liveness | **centralized** | nobody is paid to submit `Payout`; in practice the operator does |
+| Identity / KYC | **centralized** | deliberately — erasure requires a store that can delete |
+| Item description | **centralized** | the operator describes the goods |
+| Physical delivery | **centralized** | unavoidable; no ledger observes a courier |
+| Chain access | **centralized** | Blockfrost, though replaceable with an own node |
+
+Four of the centralized rows are already open questions below, which is what
+makes this content rather than an embarrassment.
+
+**Preferred handling: keep the title, define the term in the introduction.**
+Changing an approved title is bureaucratic, and defining terms precisely is a
+scholarly virtue rather than a dodge. Something like:
+
+> In this work, *decentralized* refers to the custody and settlement of funds:
+> no participant, including the platform operator, can alter the outcome of an
+> auction or seize a bid. Discovery, identity and physical delivery remain
+> centralized, and Chapter 8 examines each of those boundaries.
+
+The table then becomes a section, and the weakness becomes the chapter.
+
+**Alternative, if the title is still changeable:** *Decentralized settlement of
+English auctions on Cardano* keeps the word but attaches it to the property
+that genuinely holds.
+
+**The term of art is "trust-minimised".** It is more accurate than
+"decentralized" and is not a retreat: it claims that the trust required was
+reduced to the minimum this problem allows, which is stronger and more
+defensible than a binary. Almost nothing is fully decentralized — Uniswap has a
+centralized frontend, OpenSea is a company on a public ledger. Being precise
+about *which* properties are decentralized puts this work ahead of most in the
+area, not behind it.
+
+**Raise it before the examiner does.** Volunteering the boundary reads as
+rigour; having it pointed out reads as an oversight. Same fact, opposite
+impression.
 
 ## Open design questions for the thesis
 

@@ -72,6 +72,36 @@ export async function awaitUtxo(
 }
 
 /**
+ * Wait until the wallet itself reports holding an asset.
+ *
+ * `awaitTx` returning is not enough. Blockfrost's per-address index trails the
+ * node by a few seconds, so a wallet query made straight after a confirmation
+ * can be answered from a view that predates it -- `open-auction` once refused a
+ * freshly minted lot as "not in your wallet" for exactly this reason.
+ *
+ * On the command line the problem is invisible, because minting and opening are
+ * two commands a human runs minutes apart. A browser that does both back to
+ * back hits it every time, which is why this exists: the wizard waits for the
+ * wallet to agree it has the token before trying to lock it in a script.
+ */
+export async function awaitWalletAsset(
+  lucid: Lucid,
+  unit: string,
+  { tries = 24, delayMs = 5_000 }: { tries?: number; delayMs?: number } = {},
+): Promise<void> {
+  for (let i = 0; i < tries; i++) {
+    const utxos = await lucid.wallet().getUtxos();
+    if (utxos.some((u) => (u.assets[unit] ?? 0n) > 0n)) return;
+    if (i < tries - 1) await new Promise((r) => setTimeout(r, delayMs));
+  }
+  throw new Error(
+    `The wallet still does not report holding ${unit} after ` +
+      `${(tries * delayMs) / 1000}s. The mint confirmed, so this is an indexing ` +
+      `delay rather than a failed transaction -- check an explorer and try again.`,
+  );
+}
+
+/**
  * The slot of the current chain tip, as the provider sees it.
  *
  * Deliberately not `lucid.currentSlot()`, which converts the *local* clock to

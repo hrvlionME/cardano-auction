@@ -25,6 +25,7 @@
  */
 import type { ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import type { Db } from "../indexer/db.ts";
+import { LOT_SCHEMA } from "./lots.ts";
 
 export interface User {
   id: number;
@@ -41,8 +42,17 @@ export interface User {
 
 /** How long a sign-in challenge stays valid. Long enough to read the prompt. */
 export const NONCE_TTL_MS = 5 * 60_000;
-/** How long a session lasts before the user signs again. */
-export const SESSION_TTL_MS = 7 * 24 * 60 * 60_000;
+/**
+ * How long a session lasts before the user signs again.
+ *
+ * Thirty days rather than a week. The signature is the only credential, so an
+ * expiry is the only thing that ever forces it to be produced again -- and a
+ * prompt the user sees often is a prompt they stop reading, which is the
+ * failure mode worth avoiding when the whole point is that they *can* read what
+ * they are signing. Nothing is lost by a long session: it grants identity, not
+ * spending. Every transaction is still signed in the wallet, one at a time.
+ */
+export const SESSION_TTL_MS = 30 * 24 * 60 * 60_000;
 
 const APP_SCHEMA: string[] = [
   `CREATE TABLE IF NOT EXISTS users (
@@ -97,7 +107,7 @@ const APP_SCHEMA: string[] = [
 ];
 
 export async function ensureAppSchema(db: Db): Promise<void> {
-  for (const stmt of APP_SCHEMA) await db.query(stmt);
+  for (const stmt of [...APP_SCHEMA, ...LOT_SCHEMA]) await db.query(stmt);
 }
 
 /** 32 random bytes as hex. Used for both nonces and session tokens. */
@@ -180,6 +190,24 @@ export async function linkAddress(db: Db, address: string, userId: number): Prom
     `INSERT IGNORE INTO wallet_addresses (address, user_id) VALUES (?, ?)`,
     [address, userId],
   );
+}
+
+/**
+ * Has this account proved control of this address?
+ *
+ * The question authorises seller-only actions: editing a listing, uploading a
+ * photograph. Note what it is *not* -- there is no "seller" role and no owner
+ * column. The right to describe an auction's goods follows from controlling the
+ * address the script will pay, which is a fact on the chain, proved here by a
+ * signature. A role column would be the operator's opinion about who the seller
+ * is; this is the ledger's.
+ */
+export async function ownsAddress(db: Db, userId: number, address: string): Promise<boolean> {
+  const [rows] = await db.query<RowDataPacket[]>(
+    `SELECT 1 FROM wallet_addresses WHERE user_id = ? AND address = ?`,
+    [userId, address],
+  );
+  return rows.length > 0;
 }
 
 export async function addressesOf(db: Db, userId: number): Promise<string[]> {
