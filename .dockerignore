@@ -1,0 +1,9 @@
+# Keep the build context to what the image actually uses. In particular:
+# .env holds seed phrases and must never be baked into an image.
+**/.env
+**/node_modules
+off-chain/web/dist
+off-chain/state
+off-chain/uploads
+on-chain/dist-newstyle
+.git

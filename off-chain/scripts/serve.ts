@@ -113,7 +113,7 @@ if (keepSyncing) {
 
 console.log(`\nnetwork:  ${network}`);
 console.log(`syncing:  ${keepSyncing ? `every ${SYNC_INTERVAL_MS / 1000}s` : "no (run `deno task sync`)"}`);
-console.log(`web app:  ${webBuilt ? "yes, from web/dist" : "not built (cd web && npm run build)"}`);
+console.log(`web app:  ${webBuilt ? "yes, from web/dist" : "not built (deno task web:build)"}`);
 console.log(`\nlistening on http://localhost:${port}\n`);
 console.log(`  curl -s localhost:${port}/health | jq`);
 console.log(`  curl -s localhost:${port}/auctions | jq`);

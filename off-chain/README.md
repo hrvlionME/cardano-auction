@@ -19,25 +19,59 @@ network as `CARDANO_NETWORK`), then fund the address from the
 
 ## Tasks
 
-    deno task check     # type-check
-    deno task smoke     # offline sanity check: no network or keys needed
-    deno task wallet    # generate a testnet wallet
+Checks, all offline:
+
+    deno task check       # type-check
+    deno task smoke       # blueprint loads, params apply, encodings match Haskell
+    deno task verify-lot  # minted lots still match the current code
+    deno task web:check   # type-check the browser code
 
 `deno task smoke` is the one to run after any change to the Haskell. It
 verifies the blueprint loads, both scripts take their parameters, and the
 Plutus data encodings still match the on-chain types.
 
+Wallets:
+
+    deno task wallet      # generate a testnet wallet
+    deno task info        # balances, tokens and live auctions, parties named
+
+The lifecycle, in order. Each takes a minute or two to confirm, and each takes
+an optional trailing policy-id prefix to pick a lot:
+
+    deno task mint-lot LAPTOP        # mint the lot NFT
+    deno task open-auction 5 20      # 5 ADA reserve, closes in 20 minutes
+    deno task bid 7 --as 1           # bidder 1 bids 7 ADA
+    deno task bid 9 --as 2           # bidder 2 outbids, refunding bidder 1
+    deno task payout                 # after the deadline; waits for the tip
+    deno task claim                  # holder + seller co-sign, burn the token
+
+Indexer, API and web app (needs MariaDB, see `sql/setup.sql`, or Docker, see
+the root README):
+
+    deno task sync            # replay known auctions from the chain into MariaDB
+    deno task db:reset        # drop the indexer tables and rebuild from chain
+    deno task serve --sync    # API, chain proxy and web/dist on :8000
+    deno task web:build       # bundle the web app into web/dist
+    deno task web             # Vite dev server on :5173, proxying to :8000
+
 ## Layout
 
 | Path | What |
 |---|---|
-| `src/config.ts` | environment and network settings |
-| `src/lucid.ts` | Lucid instance, with and without a wallet |
+| `src/config.ts` | environment and network settings, for both Deno and the browser |
+| `src/lucid.ts` | Lucid instance, plus the chain-tip and stale-read helpers |
 | `src/types.ts` | Plutus data schemas mirroring the Haskell types |
 | `src/blueprint.ts` | loads `plutus.json`, applies params, derives addresses |
-| `src/tx/` | one module per transaction |
-| `scripts/smoke.ts` | offline wiring check |
-| `scripts/gen-wallet.ts` | testnet wallet generator |
+| `src/state.ts` | reads and writes `state/lot-*.json` and `state/auction-*.json` |
+| `src/cli.ts` | plain-message errors for the scripts (`DEBUG=1` for stack traces) |
+| `src/tx/` | one module per transaction, shared by the CLI and the browser |
+| `src/indexer/` | MariaDB read model, sync from the chain, read API, Blockfrost proxy |
+| `src/app/` | accounts (sign-in by wallet signature), listings, image uploads |
+| `scripts/` | one entry point per `deno task` |
+| `web/` | React + Vite web app; imports `src/` through the `@core` alias |
+| `sql/setup.sql` | one-time MariaDB database and user |
+| `state/` | lots and auctions opened from the CLI (gitignored) |
+| `uploads/` | listing photographs, named by content hash (gitignored) |
 
 ## Keeping in step with the on-chain side
 

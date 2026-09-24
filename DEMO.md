@@ -119,8 +119,8 @@ Troubleshooting.
 **`claim`** — the burn. Two signatures: the holder's, because spending the
 token needs their key, and the seller's, because the policy demands it. The
 burn is therefore a two-party receipt — on-chain evidence that both sides were
-present for the handover. `info` afterwards reports `total supply now: 0` and
-`mint/burn events: 2`. The coupon existed exactly once and was redeemed
+present for the handover. `claim` finishes by reporting `total supply now: 0`
+and `mint/burn events: 2`. The coupon existed exactly once and was redeemed
 exactly once.
 
 ---
@@ -150,6 +150,10 @@ The indexer stores into MariaDB, so the server has to be up. Once per machine:
     sudo systemctl start mariadb
     sudo mariadb < off-chain/sql/setup.sql
 
+Or, on a machine with Docker and nothing else, `docker compose up --build` from
+the repository root starts MariaDB and `serve --sync` together (see the root
+README). The CLI parts of this runbook still need Deno.
+
 Then:
 
     cd off-chain
@@ -170,7 +174,9 @@ completely and watch it come back:
 
     deno task db:reset
 
-That drops every table, recreates them, and re-syncs from the chain. It prints
+That drops every indexer table, recreates them, and re-syncs from the chain.
+Accounts and listings are left alone, because those are the one thing here
+that cannot be rebuilt from the chain. It prints
 what it dropped and what returned, and the two match, because everything in it
 is derived. Syncing is idempotent — each event is keyed by
 (auction, transaction), so a sync can be interrupted at any point and simply
@@ -187,9 +193,12 @@ there:
     mariadb -u auction -pauction auction_indexer -e "SELECT token_name, status FROM auctions"
     mariadb -u auction -pauction auction_indexer -e "SELECT kind, amount, tx_hash FROM events ORDER BY block_height"
 
-**The API is read-only, and that is the design.** It holds no keys and signs
-nothing. `POST` returns 405 with *"This API is read-only. State changes are
-signed transactions."* Say plainly what that buys: this server can lag, crash,
+**The auction API is read-only, and the server holds no keys.** `POST` to
+`/auctions` returns 405 with *"This API is read-only. State changes are signed
+transactions."* The server does accept writes elsewhere (sign-in, profiles,
+listing text and photographs, under `/auth` and `/lots`), but
+only to its own tables, and none of them can move value. It signs nothing
+anywhere. Say plainly what that buys: this server can lag, crash,
 serve stale data, or lie outright, and no bidder loses a lovelace. The worst it
 can do is mislead someone about the state of an auction — a real harm, but a
 far smaller one than being able to take funds. A conventional auction site's
@@ -201,8 +210,9 @@ backend can do both. Bidding goes through a wallet, which is what
 Because `AuctionParams` are compile-time parameters, every auction is a
 different script at a different address. **There is no "auction contract" to
 watch.** The indexer holds a list of addresses and can only ever learn about
-auctions it was told about — here, from `state/auction-*.json`; in a deployed
-system, from a table the API writes at creation time. Either way, an auction
+auctions it was told about: from `state/auction-*.json` for auctions opened on
+the command line, and from the listing the browser registers (`lots.registration`)
+for auctions opened in the web app. Either way, an auction
 opened by a stranger against the same validator source but with different
 parameters is invisible to this indexer forever.
 
@@ -230,15 +240,26 @@ there is one thing to start and one thing that can fail.
 
 ### Connecting a wallet
 
-The page lists whatever CIP-30 wallets the browser has and puts Eternl first.
-**Nothing here is Eternl-specific** — CIP-30 is the standard every Cardano
-browser wallet implements, and Lace, Nami, Flint, Typhon and Vespr all satisfy
-the same interface. Set the wallet to **Preview** before connecting; if it is on
-mainnet the page says so plainly instead of failing later with something
-cryptic.
+**Connect wallet** in the header opens a dropdown listing whatever CIP-30
+wallets the browser has, Eternl first. **Nothing here is Eternl-specific**:
+CIP-30 is the standard every Cardano browser wallet implements, and Lace, Nami,
+Flint, Typhon and Vespr all satisfy the same interface. Set the wallet to
+**Preview** before connecting; if it is on mainnet the page says so plainly
+instead of failing later with something cryptic.
 
-Import one of the bidder seed phrases from `off-chain/.env` into a fresh Eternl
-profile to bid as bidder 1 or 2.
+Import seed phrases from `off-chain/.env` into separate Eternl profiles:
+`WALLET_SEED_PHRASE` to sell, settle and burn, and a bidder phrase to bid as
+bidder 1 or 2.
+
+**Connecting and signing in are two different things, and it is worth showing
+that.** Connecting asks for no signature. It lets the page read the wallet's
+addresses and *ask* it to sign, and that is all that bidding, settling and
+burning need. **Sign in**, in the same dropdown, is separate and optional: one
+signature over a message naming this site's origin, then a 30-day session. It
+only adds what the chain deliberately does not hold: a profile, and the
+**Account** page with a bidding history drawn from chain events. Bid once
+without signing in, to show that the account is not in the path that moves
+money.
 
 ### What to say while it is on screen
 
@@ -275,6 +296,48 @@ and say nothing. The page updates on its own a few seconds later. The browser
 was never told; it read the chain. Two completely different clients — a CLI with
 a seed phrase and a browser with a wallet extension — writing to one ledger and
 both seeing the same truth.
+
+### Selling from the browser
+
+As the seller, signed in (the **Sell** page asks for it, because the listing
+text is tied to an account), fill in *Sell an item*: title, category,
+condition, description, an optional photograph, reserve price and how long
+bidding runs. The page then walks through three steps: **Mint the lot**,
+**Open the auction**, **List it here**.
+
+**Point out that it is two wallet signatures, a minute or two apart, and has to
+be.** The auction script takes the lot's currency symbol as a parameter, and
+that symbol is the hash of a minting policy that depends on the UTxO the mint
+spends. Until the token exists there is no auction address to pay to. The
+wizard shows the two steps instead of hiding them behind one spinner.
+
+The third step signs nothing on-chain. It tells this server the auction exists,
+and **the server believes none of it**: it rebuilds the minting policy and the
+script address from the submitted parameters, checks the caller controls the
+seller address, and asks the chain whether the token really sits there. If
+that step fails, the auction is still open and correct on-chain and is only
+missing from this site's index.
+
+This has not yet been run end to end in a browser. Rehearse it on a throwaway
+lot first, never on `LAPTOP`.
+
+### Settling and claiming
+
+Once the deadline passes, the auction page shows **Settle auction** to
+*anyone* connected, not only the seller. This shows that **a blockchain has no
+scheduler**: a finished auction sits on-chain, correct and unsettled, until
+someone submits a transaction. The contract guarantees that settlement is right
+if it happens, never that it happens. The button costs no trust, because
+whoever presses it still cannot make the transaction do anything the validator
+would reject; they only pay the fee. With no bids the same button returns the
+lot to the seller.
+
+After settlement, **Claim item (burn token)** appears only when the connected
+wallet is both the holder and the seller, since the burn needs both
+signatures on one transaction. When the winner is someone else, the page says
+so and points to `deno task claim`. That is a finding worth saying out loud: a
+one-party burn is one click, and a two-party burn needs a protocol between two
+people, which a button cannot supply.
 
 ---
 
@@ -384,11 +447,11 @@ Rehearse the whole of Part B once on a throwaway lot — `DEMOLOT`, never
 run you screenshot for the thesis is not polluted by debugging.
 
 Twenty minutes of live blockchain in front of an examiner is a real risk.
-Record a rehearsal:
+Record a rehearsal, typing the Part B commands inside it:
 
-    script -c 'bash demo-sequence.sh' demo.log
+    script demo.log       # records the terminal until you type `exit`
 
-or use `asciinema`. Then, if Preview is slow on the day, fall back to the
+or use `asciinema rec`. Then, if Preview is slow on the day, fall back to the
 transcript and still run Part A live — it is instant and needs no network.
 
 Keep `deno task info` open in a second terminal throughout.

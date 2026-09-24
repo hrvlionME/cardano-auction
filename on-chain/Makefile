@@ -18,7 +18,7 @@ test:           ## run the test suite
 repl:           ## poke at the validator interactively
 	cabal repl plinth-auction
 
-blueprint:      ## emit plutus.json (CIP-57) with the compiled script
+blueprint:      ## emit plutus.json (CIP-57) with both compiled scripts
 	cabal run gen-blueprint -- plutus.json
 
 clean:

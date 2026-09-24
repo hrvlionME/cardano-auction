@@ -238,8 +238,8 @@ reconstruct the whole history.
 
 **The limitation:** compile-time parameters mean every auction is a different
 script at a different address, so there is no contract to watch. The indexer
-can only learn about auctions it is told about (currently from
-`state/auction-*.json`). An auction opened by a stranger is invisible to it
+can only learn about auctions it is told about (from `state/auction-*.json` for
+CLI auctions, and `lots.registration` for browser-opened ones). An auction opened by a stranger is invisible to it
 forever. This is the practical argument for the first open question below.
 
 ## The web app
@@ -659,11 +659,11 @@ impression.
   Clean, but a reference script per auction does not scale. Moving parameters
   into the datum gives one shared script at the cost of validating untrusted
   parameters and putting all auctions at one address.
-- **`Bid` stores a `PubKeyHash`, which cannot reconstruct an address.** This is
-  the sharpest of these, and the two-bidder run demonstrated it rather than
-  merely predicting it — see the gotcha above. Storing an `Address` in the datum
-  fixes it, at the cost of a larger datum and of having to validate a structure
-  the bidder supplied rather than one the chain derived.
+- **Resolved 2026-08-30: `Bid` used to store a `PubKeyHash`, which cannot
+  reconstruct an address.** The two-bidder run demonstrated it rather than
+  merely predicting it — see the gotcha above. `Bid` and `AuctionParams` now
+  store an `Address`. The cost that remains worth discussing is a larger datum,
+  and a structure the bidder supplied rather than one the chain derived.
 - Nobody is paid to submit `Payout`, and the submitter funds the winner's
   min-ADA out of pocket. Confirmed by the balances: across a four-bid auction
   the seller was down 5 test ADA net of the winning bid, having fronted min-ADA

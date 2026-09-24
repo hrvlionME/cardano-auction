@@ -40,6 +40,7 @@ current highest bidder, who must not be allowed to withdraw anyway.
 
 After the deadline, anyone may submit the `Payout` transaction; the validator
 enforces that the seller gets the winning bid and the winner gets the lot token.
+If nobody bid, the same redeemer returns the lot token to the seller.
 
 ## Layout
 

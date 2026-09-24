@@ -1,0 +1,56 @@
+# The whole app on any machine with Docker:
+#
+#   cp .env.docker.example .env      # then put your Blockfrost id in it
+#   docker compose up --build
+#   open http://localhost:8000
+#
+# Two containers: MariaDB, and the Deno server that serves the API, the
+# Blockfrost proxy and the built web page on one port.
+
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      # The official image creates the database and user on first start, which
+      # replaces `sudo mariadb < off-chain/sql/setup.sql`.
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-auction-root}
+      MARIADB_DATABASE: auction_indexer
+      MARIADB_USER: auction
+      MARIADB_PASSWORD: ${DB_PASSWORD:-auction}
+    volumes:
+      - db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8000}:8000"
+    # Only what the server needs. Seed phrases are deliberately absent: the
+    # server holds no keys and signs nothing.
+    environment:
+      CARDANO_NETWORK: ${CARDANO_NETWORK:-Preview}
+      BLOCKFROST_PROJECT_ID: ${BLOCKFROST_PROJECT_ID:?set BLOCKFROST_PROJECT_ID in .env}
+      SITE_ORIGIN: ${SITE_ORIGIN:-http://localhost:8000}
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_USER: auction
+      DB_PASSWORD: ${DB_PASSWORD:-auction}
+      DB_NAME: auction_indexer
+    volumes:
+      # Photographs sellers upload, and the records of auctions opened from the
+      # CLI. Both are operator-held and not in git; keeping them on the host
+      # means they survive rebuilding the image.
+      - ./off-chain/uploads:/app/off-chain/uploads
+      - ./off-chain/state:/app/off-chain/state
+
+volumes:
+  db-data:
