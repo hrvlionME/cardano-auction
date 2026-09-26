@@ -25,17 +25,12 @@ function Header() {
 
   return (
     <header>
-      {/*
-        The mark alone, with no wordmark beside it. It is still a link home, so
-        it still needs an accessible name -- a screen reader announcing "link, ₳"
-        is not one, which is why the label is on the link rather than left to
-        the glyph.
-      */}
-      <NavLink className="brand" to="/" aria-label="Home">
+      <NavLink className="brand" to="/" aria-label="Auction house home">
         <span className="mark" aria-hidden="true">₳</span>
+        <span className="wordmark">Auction<span>house</span></span>
       </NavLink>
 
-      <nav>
+      <nav aria-label="Main navigation">
         <NavLink end to="/">Browse</NavLink>
         <NavLink to="/sell">Sell</NavLink>
         {me.user && <NavLink to="/account">Account</NavLink>}
@@ -54,8 +49,9 @@ export default function App() {
 
   return (
     <>
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <Header />
-      <main className="wrap">
+      <main className="wrap" id="main-content" tabIndex={-1}>
         {error && <Notice kind="err">{error}</Notice>}
 
         {conn && !me.user && !signingIn && !hideHint && (
@@ -99,24 +95,24 @@ export default function App() {
       <footer>
         <div className="wrap footgrid">
           <div>
-            <strong>Decentralized where it counts</strong>
+            <strong>Your bids, protected</strong>
             <p>
-              Custody, settlement and the auction rules are enforced by a Plutus validator: no
-              participant, this site's operator included, can seize a bid or alter a result.
+              Bids and payouts follow rules enforced on Cardano. This site cannot take your bid
+              or change the auction result.
             </p>
           </div>
           <div>
-            <strong>Centralized where it must be</strong>
+            <strong>Your details, private</strong>
             <p>
-              Discovery, identity, the description of the goods and physical delivery are ours.
-              Personal data is kept off the chain precisely so it can be corrected and erased.
+              Listings and delivery are managed off-chain. Your personal details stay off the
+              public blockchain, where they can be updated or deleted.
             </p>
           </div>
           <div>
-            <strong>Check us</strong>
+            <strong>Independently verifiable</strong>
             <p>
-              Every figure on this site links to a public explorer. The database is a cache that
-              can be thrown away and rebuilt from the ledger.
+              Follow the explorer links on each auction to verify its transactions.
+              Auction activity is recorded on the public blockchain.
             </p>
           </div>
         </div>

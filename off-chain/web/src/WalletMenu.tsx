@@ -1,22 +1,8 @@
 /**
- * Connecting, and signing in, from the header.
- *
- * There is no separate sign-in page, because there is no separate sign-in
- * *step* for most of what this site does. The two actions are genuinely
- * different in kind and the menu keeps them apart:
- *
- *   **Connect** grants this page read access and the right to *ask* for a
- *   signature. It hands over no keys. It is all that bidding, settling and
- *   burning require, and none of those consult this server at all.
- *
- *   **Sign in** proves control of an address to the server, once, so it can
- *   remember a name and a delivery address. It authorises no payment. It is
- *   optional, and everything above keeps working without it.
- *
- * So connecting never asks for a signature, and the session lasts a month: a
- * prompt the user sees constantly is a prompt they stop reading, which is the
- * one habit worth not building when the whole argument is that they can read
- * what they sign.
+ * Wallet connection and account access. Explicit connection signs in as part
+ * of the same action, reusing a valid server session before requesting a
+ * signature. Background reconnection never requests a login signature.
+ * Transaction approvals remain separate and are always handled by the wallet.
  */
 import { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
@@ -89,14 +75,16 @@ export default function WalletMenu() {
     <div className="walletmenu" ref={box}>
       <button
         className="btn small primary"
-        disabled={connecting}
+        aria-expanded={open}
+        aria-controls="wallet-options"
+        disabled={connecting || signingIn}
         onClick={() => setOpen((o) => !o)}
       >
-        {connecting ? <><Spinner /> connecting…</> : "Connect wallet"}
+        {connecting ? <><Spinner /> connecting…</> : "Connect & sign in"}
       </button>
 
       {open && (
-        <div className="dropdown">
+        <div className="dropdown" id="wallet-options">
           {wallets.length === 0
             ? (
               <div className="dropnote">
@@ -115,8 +103,8 @@ export default function WalletMenu() {
                   </button>
                 ))}
                 <div className="dropnote">
-                  Connecting hands over no keys. It lets this page ask your wallet to sign, and
-                  you see and approve every transaction. An account is separate and optional.
+                  Choose a wallet to connect and sign in. First-time login asks you to sign a
+                  message, not a payment. Returning visits use your saved session.
                 </div>
               </>
             )}

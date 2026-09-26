@@ -55,12 +55,9 @@ interface Session {
   connecting: boolean;
   signingIn: boolean;
   error: string | null;
-  /**
-   * Connect a wallet. Deliberately does *not* ask for a sign-in signature --
-   * see the note on `signIn`.
-   */
-  connectWallet: (key: string) => Promise<boolean>;
-  /** Sign in with an already-connected wallet. Always user-initiated. */
+  /** Explicit connection also signs in; background reconnection never prompts. */
+  connectWallet: (key: string, login?: boolean) => Promise<boolean>;
+  /** Reuse a valid session, or request proof of ownership. */
   signIn: () => Promise<boolean>;
   /** Drop the wallet but keep any account session. */
   disconnect: () => void;
@@ -158,21 +155,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  /**
-   * Connect a wallet, and nothing else.
-   *
-   * It used to sign in straight afterwards, which meant two prompts in a row --
-   * and, worse, a *signature* prompt on every connect even when the browser
-   * already held a perfectly valid session. Signing something you have already
-   * signed teaches people to click through prompts without reading them, which
-   * is precisely the habit this design is trying not to build.
-   *
-   * So connecting is now only connecting. It is all that bidding, settling and
-   * burning need: those are transactions the chain validates, and this server
-   * is never consulted for one. Signing in is a separate, explicit act that
-   * happens at most once a month.
-   */
-  const connectWallet = useCallback(async (key: string): Promise<boolean> => {
+  /** User-initiated connection includes login; silent restoration is wallet-only. */
+  const connectWallet = useCallback(async (key: string, login = true): Promise<boolean> => {
     setConnecting(true);
     setError(null);
     try {
@@ -181,6 +165,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const address = await lucid.wallet().address();
       setConn({ api, lucid, address, balance: await readBalance(lucid) });
       remember(key);
+      if (login) await signInWith(lucid);
       return true;
     } catch (e) {
       setError(
@@ -192,7 +177,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     } finally {
       setConnecting(false);
     }
-  }, []);
+  }, [signInWith]);
 
   /**
    * Reconnect on load to the wallet this browser used last.
@@ -211,7 +196,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // Extensions inject themselves as the page loads; give them a moment.
       for (let i = 0; i < 12 && !cancelled; i++) {
         if (await alreadyEnabled(key)) {
-          if (!cancelled) await connectWallet(key);
+          if (!cancelled) await connectWallet(key, false);
           return;
         }
         await new Promise((r) => setTimeout(r, 300));

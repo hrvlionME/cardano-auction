@@ -10,7 +10,7 @@ export function Spinner() {
 export function Notice(
   { kind = "info", children }: { kind?: "info" | "ok" | "err" | "warn"; children: ReactNode },
 ) {
-  return <div className={`notice ${kind}`}>{children}</div>;
+  return <div className={`notice ${kind}`} role={kind === "err" ? "alert" : "status"}>{children}</div>;
 }
 
 /** Ticks once a second. Rendered wherever a deadline is shown. */

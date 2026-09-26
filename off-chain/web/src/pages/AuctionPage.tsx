@@ -75,14 +75,16 @@ export default function AuctionPage() {
         </Notice>
       )}
 
+      <div className="auction-heading">            <div className="titlerow">
+              <h1 className="page-title">{title}</h1>
+              <Phase phase={a.phase} />
+            </div>
+</div>
       <div className="detail">
         <div className="detail-left">
           <LotImage item={a.item} tokenName={a.tokenName} className="big" />
-          <div className="describe">
-            <div className="titlerow">
-              <h2>{title}</h2>
-              <Phase phase={a.phase} />
-            </div>
+          <section className="describe panel">
+            <h2>About this item</h2>
             <div className="sub mono">
               {a.tokenName}
               {" · "}
@@ -98,8 +100,7 @@ export default function AuctionPage() {
               ? <p className="prose">{a.item.description}</p>
               : (
                 <p className="prose dimmed">
-                  This lot has no description. It was most likely opened from the command line,
-                  where a lot is only a token name.
+                  The seller has not added a description for this item.
                 </p>
               )}
             <div className="sub">
@@ -108,14 +109,14 @@ export default function AuctionPage() {
                 {short(a.sellerAddress)}
               </a>
             </div>
-          </div>
+          </section>
         </div>
 
         <div className="detail-right">
+          <h2 className="auction-summary-title">Auction overview</h2>
           <div className="figures">
-            <Figure label="Reserve" value={<>{ada(a.minBidLovelace)}<small>₳</small></>} />
             <Figure
-              label={a.phase === "settled" ? "Winning bid" : "Standing bid"}
+              label={a.phase === "settled" ? "Winning bid" : "Current bid"}
               value={a.leader ? <>{ada(a.leader.amountLovelace)}<small>₳</small></> : "--"}
               note={a.leader
                 ? leading ? "yours" : a.leader.name ?? short(a.leader.address, 10, 5)
@@ -132,6 +133,7 @@ export default function AuctionPage() {
               }
               note={new Date(a.endTime).toLocaleString()}
             />
+            <Figure label="Starting price" value={<>{ada(a.minBidLovelace)}<small>₳</small></>} />
             <Figure label="Bids" value={a.bidCount} />
           </div>
 
@@ -152,6 +154,8 @@ export default function AuctionPage() {
         </div>
       </div>
 
+      <Events events={a.events} you={you} />
+
       {iAmSeller && (
         <EditListing
           policyId={a.policyId}
@@ -161,8 +165,6 @@ export default function AuctionPage() {
           onSaved={() => void refresh()}
         />
       )}
-
-      <Events events={a.events} you={you} />
 
       {modal && (
         <Modal title={modal.what} onClose={() => setModal(null)}>

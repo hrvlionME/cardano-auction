@@ -57,6 +57,12 @@ export async function signIn(
   lucid: { wallet(): { address(): Promise<string>; signMessage(a: string, p: string): Promise<{ signature: string; key: string }> } },
 ): Promise<Me & { isNew: boolean }> {
   const address = await lucid.wallet().address();
+  // A remembered wallet is not proof of identity. Only reuse a server-validated
+  // session belonging to this address (or another address proved by that user).
+  const existing = await me();
+  if (existing.user && (existing.address === address || existing.addresses?.includes(address))) {
+    return { ...existing, isNew: false };
+  }
   const { nonce, payloadHex } = await call<{ nonce: string; payloadHex: string }>(
     "/auth/nonce",
     { method: "POST", body: JSON.stringify({ address }) },

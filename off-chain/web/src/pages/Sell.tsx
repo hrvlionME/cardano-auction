@@ -238,11 +238,11 @@ export default function Sell() {
   if (!me.user) {
     return (
       <div className="panel narrow">
-        <h2>Sign in to sell</h2>
+        <span className="eyebrow">Start selling</span>
+        <h1 className="page-title">Your next auction starts here.</h1>
         <p className="prose">
-          Selling needs an account, because the listing — the title, the photograph, the
-          description — is ours to store and has to belong to somebody. Bidding does not: a bid is
-          a transaction the chain validates, and this server is never consulted for one.
+          Connect your wallet and sign in to create and manage your listings.
+          No password needed, and signing in does not authorise a payment.
         </p>
         {conn
           ? (
@@ -254,12 +254,12 @@ export default function Sell() {
             </div>
           )
           : wallets.length === 0
-          ? <Notice kind="warn">No CIP-30 wallet detected in this browser.</Notice>
+          ? <Notice kind="warn">No compatible wallet found. Install a Cardano browser wallet, then reload this page to connect.</Notice>
           : (
             <div className="walletlist">
               {wallets.map((w) => (
                 <button key={w.key} className="btn primary" onClick={() => void connectWallet(w.key)}>
-                  {w.icon && <img src={w.icon} alt="" />} Connect {w.name}
+                  {w.icon && <img src={w.icon} alt="" />} Connect & sign in with {w.name}
                 </button>
               ))}
             </div>
@@ -330,10 +330,8 @@ export default function Sell() {
           </a>
         )}
         <p className="fine">
-          Two transactions are needed, and it could not be one: the auction's script is
-          parameterised by the lot's policy id, which is itself a hash of the UTxO the mint
-          consumes. There is no auction address to compute until the token exists. Leave this tab
-          open.
+          Keep this tab open. You will approve two transactions in your wallet:
+          one to create the item’s token and one to open the auction. Each needs time to confirm.
         </p>
       </div>
     );
@@ -342,8 +340,9 @@ export default function Sell() {
   const lowBalance = conn !== null && conn.balance < MIN_BALANCE;
 
   return (
-    <div className="panel narrow">
-      <h2>Sell an item</h2>
+    <div className="sell-page">
+      <span className="eyebrow">Create a listing</span>
+      <h1 className="page-title">Sell an item</h1>
       <p className="prose">
         This mints a one-of-a-kind token standing for your item, then locks it in an auction
         contract until the deadline. Both transactions are signed in your wallet; this site never
@@ -358,6 +357,9 @@ export default function Sell() {
         </Notice>
       )}
 
+      <div className="sell-layout">
+      <section className="panel sell-details">
+      <h2 className="form-section"><span className="step-number">1</span> Item details</h2>
       <label>
         <span>What are you selling?</span>
         <input
@@ -419,9 +421,12 @@ export default function Sell() {
         />
       </label>
 
+      </section>
+      <aside className="panel sell-settings">
+      <h2 className="form-section"><span className="step-number">2</span> Auction settings</h2>
       <div className="row2">
         <label>
-          <span>Reserve price</span>
+          <span>Starting price (ADA)</span>
           <div className="amountfield">
             <input
               type="number"
@@ -448,10 +453,8 @@ export default function Sell() {
       </div>
 
       <p className="fine">
-        The deadline is enforced by the validator through the transaction's validity interval, not
-        by a timer on this server. After it passes, anyone may submit the settlement — a
-        blockchain has no scheduler, so the contract guarantees that settling is <em>correct</em>,
-        never that somebody gets round to it.
+        Once opened, your item stays locked in the auction until it ends. After the deadline,
+        a settlement transaction is needed to release the item and payment; anyone can submit it.
       </p>
 
       <div className="formfoot">
@@ -459,6 +462,8 @@ export default function Sell() {
           Mint and open the auction
         </button>
         <span className="sub">Two wallet signatures, a minute or two apart.</span>
+      </div>
+      </aside>
       </div>
     </div>
   );

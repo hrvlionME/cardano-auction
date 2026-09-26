@@ -26,10 +26,11 @@ export default function Account() {
 
   return (
     <>
-      <div className="subnav">
+      <div className="page-heading"><span className="eyebrow">Your space</span><h1 className="page-title">My account</h1><p className="prose">Manage your details and keep track of your bids.</p></div>
+      <nav className="subnav" aria-label="Account navigation">
         <NavLink end to="/account">Profile</NavLink>
         <NavLink to="/account/history">Bidding history</NavLink>
-      </div>
+      </nav>
       <Routes>
         <Route index element={<Profile me={me} onMe={setMe} />} />
         <Route path="history" element={<History />} />

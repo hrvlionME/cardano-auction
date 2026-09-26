@@ -16,7 +16,6 @@ import { forDisplay, matches, useListings } from "../data.ts";
 import type { Listing } from "../lots.ts";
 import { ada, label } from "../format.ts";
 import { Countdown, LotImage, Notice, Phase, Tags } from "../ui.tsx";
-import { useSession } from "../session.tsx";
 
 function Card({ l }: { l: Listing }) {
   const title = l.item?.title ?? l.tokenName;
@@ -28,11 +27,10 @@ function Card({ l }: { l: Listing }) {
       </div>
       <div className="lotcard-body">
         <h3 title={title}>{title}</h3>
-        {l.item?.title && <div className="sub mono">{l.tokenName}</div>}
         <Tags item={l.item} />
         <div className="lotcard-foot">
           <div>
-            <div className="label">{l.leader ? "Standing bid" : "Reserve"}</div>
+            <div className="label">{l.leader ? "Current bid" : "Starting price"}</div>
             <div className="price">
               {ada(l.leader?.amountLovelace ?? l.minBidLovelace)}<small>₳</small>
             </div>
@@ -46,6 +44,7 @@ function Card({ l }: { l: Listing }) {
             </div>
           </div>
         </div>
+        <div className="card-action">View auction <span aria-hidden="true">→</span></div>
       </div>
     </Link>
   );
@@ -53,7 +52,6 @@ function Card({ l }: { l: Listing }) {
 
 export default function Browse() {
   const { data, error, categories } = useListings();
-  const { me } = useSession();
   const [q, setQ] = useState("");
   const [category, setCategory] = useState<string>("");
 
@@ -68,52 +66,46 @@ export default function Browse() {
 
   return (
     <>
-      <section className="hero">
-        <div>
-          <h2>Auctions</h2>
-          <p>
-            Bids are held by a Plutus validator, not by this site. Nobody here — including
-            whoever runs it — can seize a bid, alter a result, or settle an auction in a way the
-            script would reject. Every figure below links to a public explorer so you can check
-            it against the chain rather than trusting the page.
-          </p>
-        </div>
-        {data && (
-          <div className="herostats">
-            <div>
-              <strong>{live}</strong>
-              <span>live now</span>
-            </div>
-            <div>
-              <strong>{data.length}</strong>
-              <span>indexed</span>
-            </div>
-          </div>
-        )}
+      <section className="browse-heading">
+        <div><span className="eyebrow">Marketplace</span><h1>Find your next great item.</h1>
+          <p className="prose">Browse auctions, connect your wallet, and place your bid.</p></div>
+        <Link className="btn primary" to="/sell">+ Create an auction</Link>
       </section>
+      <div className="market-summary">
+        <span><strong>{data ? live : "—"}</strong> live auctions</span>
+        <span><strong>{data ? data.length : "—"}</strong> total listings</span>
+        <span className="sub">Bids and payments secured on Cardano</span>
+      </div>
 
       {error && (
         <Notice kind="err">
-          Could not reach the indexer: {error}
-          {"\n"}Is it running? cd off-chain && deno task serve --sync
+          <strong>Auctions are temporarily unavailable.</strong> Please try again shortly.
+          <details><summary>Technical details</summary>{error}</details>
         </Notice>
       )}
 
-      <div className="filters">
+      <div className="market-layout">
+      <aside className="browse-sidebar" aria-label="Auction filters">
+        <h2>Find an auction</h2>
+        <label className="search-label"><span>Search</span>
         <input
           className="search"
           type="search"
-          placeholder="Search lots…"
+          placeholder="Search auctions…"
+          aria-label="Search auctions"
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
+        </label>
+        <h3>Categories</h3>
         <div className="chips">
-          <button className={`chip ${category === "" ? "on" : ""}`} onClick={() => setCategory("")}>
-            All
+          <button aria-pressed={category === ""} className={`chip ${category === "" ? "on" : ""}`} onClick={() => setCategory("")}>
+            All items
           </button>
           {categories.map((c) => (
             <button
               key={c}
+              aria-pressed={category === c}
               className={`chip ${category === c ? "on" : ""}`}
               onClick={() => setCategory(category === c ? "" : c)}
             >
@@ -121,24 +113,25 @@ export default function Browse() {
             </button>
           ))}
         </div>
-        {me.user && <Link className="btn primary" to="/sell">Sell an item</Link>}
-      </div>
+        <div className="sidebar-help"><strong>New to auctions?</strong><p>Choose an item to see its details, bidding deadline, and minimum bid. You approve every payment in your wallet.</p></div>
+      </aside>
+      <section className="market-results" aria-label="Auction results">
+        <div className="section-heading"><h2>{category ? label(category) : "All auctions"}</h2>
+          {rows !== null && <span className="sub" role="status">{rows.length} results</span>}
+        </div>
 
-      {rows === null && <div className="empty">Loading…</div>}
+      {rows === null && <div className="empty loading-state" role="status"><span className="spin" aria-hidden="true" /><strong>Finding your next great find</strong><p>Loading auctions…</p></div>}
 
       {rows !== null && rows.length === 0 && (
         <div className="empty">
           {data && data.length > 0
-            ? <>Nothing matches that search.</>
+            ? <><strong>No matching auctions</strong><p>Try a different search or choose another category.</p></>
             : (
               <>
-                <strong>No auctions indexed yet.</strong>
-                <p className="sub">
-                  Every auction compiles to its own script at its own address, so there is no
-                  single contract to watch — the indexer only sees auctions it has been told
-                  about. Open one {me.user ? <Link to="/sell">here</Link> : "by signing in"}, or
-                  from the command line with <code>deno task open-auction</code>.
-                </p>
+                <span className="empty-symbol" aria-hidden="true">₳</span>
+                <strong>The next great find starts here</strong>
+                <p className="sub">There are no auctions listed yet. Check back soon, or list an item of your own.</p>
+                <Link className="btn primary" to="/sell">Create an auction <span aria-hidden="true">↗</span></Link>
               </>
             )}
         </div>
@@ -149,6 +142,8 @@ export default function Browse() {
           {rows.map((l) => <Card key={l.policyId} l={l} />)}
         </div>
       )}
+      </section>
+      </div>
     </>
   );
 }
