@@ -43,7 +43,7 @@ an optional trailing policy-id prefix to pick a lot:
     deno task bid 7 --as 1           # bidder 1 bids 7 ADA
     deno task bid 9 --as 2           # bidder 2 outbids, refunding bidder 1
     deno task payout                 # after the deadline; waits for the tip
-    deno task claim                  # holder + seller co-sign, burn the token
+    deno task claim                  # the winner burns the token on receipt
 
 Indexer, API and web app (needs MariaDB, see `sql/setup.sql`, or Docker, see
 the root README):
@@ -80,3 +80,21 @@ sides. Nothing checks them against each other at build time -- a mismatch
 surfaces on-chain as an opaque parse failure, after submission. When you change
 a Haskell type, change the schema here, regenerate the blueprint with
 `make blueprint` in `../on-chain`, and run `deno task smoke`.
+
+After *any* change to the Haskell, even one that touches no type:
+
+    cd ../on-chain && make blueprint   # new plutus.json
+    deno task smoke                    # encodings still agree
+    deno task verify-lot               # which minted lots still match
+    deno task web:build                # the bundle carries the script hashes too
+    # then restart `deno task serve`   # it loads the blueprint once, at startup
+
+A server left running on the old blueprint rejects every lot listed from the
+browser, because it re-derives the minting policy to check the listing and gets
+the old answer.
+
+`verify-lot` reporting DRIFT for lots minted before the change is expected, not
+a fault. A lot's policy id is the hash of the code it was minted under, so it
+keeps that code's rules forever, and the current code cannot burn it. Mint a
+fresh lot. The auction validator is a separate script, so a change to the lot
+policy leaves every auction address where it was.

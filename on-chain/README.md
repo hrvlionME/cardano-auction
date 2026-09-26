@@ -20,11 +20,18 @@ once, and the token is provably unique. Each item gets its own policy, and
 therefore its own `CurrencySymbol`.
 
 The token is a **bearer claim** on the physical item: whoever holds it is
-entitled to collect. Burning it is the winner redeeming that claim, and the
-policy requires the seller's signature on the burn as well as the holder's
-(spending the token needs the holder's key anyway). A burn is therefore a
-two-party receipt, and a claim already redeemed is distinguishable on-chain
-from one still outstanding.
+entitled to collect. Burning it is the winner redeeming that claim: the
+buyer's confirmation that the item arrived. Only the holder can burn it,
+because burning means spending the UTxO that holds the token, and the ledger
+requires the owner's signature for that before any script runs. The policy
+adds nothing on top. A claim already redeemed is distinguishable on-chain from
+one still outstanding.
+
+An earlier version also required the seller's signature, making the burn a
+two-party handshake. It was dropped. A browser wallet signs only for itself,
+so the handshake needed an off-chain relay between two people. Co-signing also
+exposed the seller: a "burn" that also spent one of the seller's UTxOs
+satisfied that policy, since it only asked for the signature.
 
 What the chain cannot do is force anyone to hand over a laptop. The auction is
 trustless; settlement of the physical good is not. The NFT narrows that gap by
@@ -62,6 +69,11 @@ If nobody bid, the same redeemer returns the lot token to the seller.
 
 The first build compiles the whole Plutus stack from source and takes a long
 time. Later builds are fast.
+
+`plutus.json` is the interface to `off-chain/`, and it is committed. After any
+change here, follow the checklist in `../off-chain/README.md` ("Keeping in step
+with the on-chain side"). Lots minted under older code keep their old rules,
+since a policy id is the hash of the code that minted it.
 
 ## Double satisfaction
 

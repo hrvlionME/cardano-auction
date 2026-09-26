@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { paymentCredentialOf } from "@lucid-evolution/lucid";
 import { payout } from "@core/tx/payout.ts";
 import { claim } from "@core/tx/claim.ts";
@@ -30,20 +30,43 @@ interface Props {
  * liveness that costs nothing in trust, because whoever clicks it still cannot
  * make the transaction do anything the validator would reject.
  *
- * **Claim** is the burn -- the receipt for handing the physical item over. It
- * needs two signatures, the holder's and the seller's, so the browser can only
- * offer it when one person is both. See the note rendered below for why that
- * is a finding rather than an omission.
+ * **Claim** is the burn -- the winner's confirmation that the item arrived.
+ * Only the holder of the token can burn it, so only the holder is offered the
+ * button: the winner, or the seller when nobody bid and the lot came home.
  */
 export default function Settle({ auction, lucid, address, onDone }: Props) {
   const [busy, setBusy] = useState<"settle" | "claim" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [burned, setBurned] = useState<boolean | null>(null);
+
+  // Whether the token still exists, asked of the chain through our proxy. The
+  // indexer does not see a burn -- it happens in the holder's wallet, not at
+  // the auction address -- so without this a redeemed lot would keep offering
+  // a button that can only fail. Re-asked whenever a transaction finishes.
+  const settled = auction.phase === "settled";
+  useEffect(() => {
+    if (!settled) return;
+    let live = true;
+    fetch(`/chain/assets/${auction.unit}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((a: { quantity: string } | null) => {
+        if (live) setBurned(a ? a.quantity === "0" : null);
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [settled, auction.unit, busy]);
 
   if (auction.phase === "bidding") return null;
 
+  // Who holds the token after settlement: the winner, or the seller if nobody
+  // bid. Compared by payment key, which is what signs.
   const myPkh = address ? paymentCredentialOf(address).hash : null;
-  const iAmSeller = myPkh !== null && auction.lot !== null &&
-    myPkh === auction.lot.sellerPkh;
+  const holderPkh = auction.leader?.address
+    ? paymentCredentialOf(auction.leader.address).hash
+    : auction.lot?.sellerPkh ?? null;
+  const iHoldIt = myPkh !== null && myPkh === holderPkh;
 
   async function run(what: "settle" | "claim") {
     if (!lucid) return;
@@ -55,13 +78,48 @@ export default function Settle({ auction, lucid, address, onDone }: Props) {
       } else {
         const lot = toLotState(auction);
         if (!lot) throw new Error("This lot's minting parameters are not recorded.");
-        onDone((await claim(lucid, lot, {})).txHash);
+        onDone((await claim(lucid, lot)).txHash);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(null);
     }
+  }
+
+  function burnPanel() {
+    if (burned) {
+      return (
+        <div className="notice ok">
+          Handed over. The lot token has been burned, so the claim is redeemed and can never be
+          used again — and anyone can check that on the chain.
+        </div>
+      );
+    }
+    if (iHoldIt) {
+      return (
+        <>
+          <div className="bidrow">
+            <button className="primary" onClick={() => run("claim")} disabled={!lucid || busy !== null}>
+              {busy === "claim" ? <><span className="spin" /> burning…</> : "Claim item (burn token)"}
+            </button>
+            <span className="sub">Confirms the item is in your hands.</span>
+          </div>
+          <div className="balance">
+            {auction.leader
+              ? "Press this once you have received the item. Burning the token is your receipt: it tells the seller, and anyone else who looks, that the handover is done. It cannot be undone."
+              : "Nobody bid, so the lot came back to you. Burning it retires the token for good."}
+          </div>
+        </>
+      );
+    }
+    return (
+      <div className="notice info">
+        {auction.leader
+          ? "Settled. The winner holds the lot token and burns it once the item has arrived."
+          : "Settled with no bids. The lot token went back to the seller."}
+      </div>
+    );
   }
 
   return (
@@ -86,32 +144,7 @@ export default function Settle({ auction, lucid, address, onDone }: Props) {
         </>
       )}
 
-      {auction.phase === "settled" && auction.lot && (
-        iAmSeller
-          ? (
-            <>
-              <div className="bidrow">
-                <button className="primary" onClick={() => run("claim")} disabled={!lucid || busy !== null}>
-                  {busy === "claim" ? <><span className="spin" /> burning…</> : "Claim item (burn token)"}
-                </button>
-                <span className="sub">Marks the item as handed over.</span>
-              </div>
-              <div className="balance">
-                Burning needs the holder's signature and the seller's. You are both here, so one
-                signature covers it.
-              </div>
-            </>
-          )
-          : (
-            <div className="notice info">
-              Settled. The winner holds the lot token.
-              {"\n\n"}Burning it — the receipt for handing the item over — needs two signatures,
-              the holder's and the seller's, on one transaction. That is a protocol between two
-              people rather than a button, so this interface does not offer it. The command line
-              does, with both keys present: <code>deno task claim</code>.
-            </div>
-          )
-      )}
+      {settled && auction.lot && burnPanel()}
 
       {!lucid && auction.phase === "closed" && (
         <div className="notice info">Connect a wallet to settle this auction.</div>

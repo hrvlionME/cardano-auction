@@ -45,6 +45,10 @@ because the server signs nothing. Everything is signed in the visitor's
 browser wallet. `off-chain/uploads/` and `off-chain/state/` are mounted from
 the host, and the database lives in the `db-data` volume.
 
+The image contains `on-chain/plutus.json` and a web bundle built from it, so
+after `make blueprint` rebuild it with `docker compose up --build`. Otherwise
+it keeps serving the old script hashes.
+
 A fresh machine starts with an empty database. Auctions come back from the
 chain, but only when `state/` is present or the listing is in `lots`. Accounts
 and listing text exist in no other place, so copy them over with a dump:

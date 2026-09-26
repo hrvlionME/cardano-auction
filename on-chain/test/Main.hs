@@ -484,26 +484,12 @@ extraTokenNameRejected = testCase "minting extra token names alongside the lot i
 
 {- | Burning is the winner redeeming the coupon for the physical laptop.
 
-Spending the token already requires the holder's key, so demanding the
-seller's signature on top makes the burn a two-party handshake: on-chain
-evidence that both sides were present for the handover. Note the seed UTxO is
-long gone by now, and is not required.
+The holder alone is enough: the token sits in the transaction's inputs, so its
+owner has signed, and the ledger checks that before the policy runs. Note the
+seed UTxO is long gone by now, and is not required either.
 -}
-burnWithSellerSignatureAccepted :: TestTree
-burnWithSellerSignatureAccepted = testCase "burning the lot with the seller's signature is accepted" $ do
-  let txInfo =
-        emptyTxInfo
-          { txInfoInputs = [plainInput (txOutRefOf 42) alice (ada 2_000_000 <> lot lotA)]
-          , txInfoMint = mintOf lotPolicy [(lotA, -1)]
-          , txInfoSignatories = [alice, seller]
-          }
-  ok <- mints lotParams (mintCtx txInfo lotPolicy)
-  assertBool "a co-signed burn should be accepted" ok
-
--- | Without the seller the burn is unilateral, and proves nothing about
--- whether the item ever changed hands.
-burnWithoutSellerRejected :: TestTree
-burnWithoutSellerRejected = testCase "burning without the seller's signature is rejected" $ do
+burnByHolderAccepted :: TestTree
+burnByHolderAccepted = testCase "burning the lot by its holder alone is accepted" $ do
   let txInfo =
         emptyTxInfo
           { txInfoInputs = [plainInput (txOutRefOf 42) alice (ada 2_000_000 <> lot lotA)]
@@ -511,7 +497,22 @@ burnWithoutSellerRejected = testCase "burning without the seller's signature is 
           , txInfoSignatories = [alice]
           }
   ok <- mints lotParams (mintCtx txInfo lotPolicy)
-  assertBool "an unwitnessed burn must be rejected" (not ok)
+  assertBool "the holder's burn should be accepted" ok
+
+-- | A burn asks for no signature, so it must not become a way around the
+-- seed: burning the lot while minting a new token name under the same policy
+-- would conjure an asset without spending the seed. The exactly-one-name rule
+-- refuses it.
+burnWithMintRejected :: TestTree
+burnWithMintRejected = testCase "burning the lot while minting another token is rejected" $ do
+  let txInfo =
+        emptyTxInfo
+          { txInfoInputs = [plainInput (txOutRefOf 42) alice (ada 2_000_000 <> lot lotA)]
+          , txInfoMint = mintOf lotPolicy [(lotA, -1), (lotB, 1)]
+          , txInfoSignatories = [alice]
+          }
+  ok <- mints lotParams (mintCtx txInfo lotPolicy)
+  assertBool "SECURITY: a burn smuggled a new token past the seed check" (not ok)
 
 -- | Only 1 and -1 are meaningful for a token that is supposed to be unique.
 oddQuantityRejected :: TestTree
@@ -520,7 +521,7 @@ oddQuantityRejected = testCase "burning a quantity other than one is rejected" $
         emptyTxInfo
           { txInfoInputs = [plainInput (txOutRefOf 42) alice (ada 2_000_000 <> lot lotA)]
           , txInfoMint = mintOf lotPolicy [(lotA, -2)]
-          , txInfoSignatories = [alice, seller]
+          , txInfoSignatories = [alice]
           }
   ok <- mints lotParams (mintCtx txInfo lotPolicy)
   assertBool "only -1 may be burned" (not ok)
@@ -549,8 +550,8 @@ main =
           ]
       , testGroup
           "claiming the item"
-          [ burnWithSellerSignatureAccepted
-          , burnWithoutSellerRejected
+          [ burnByHolderAccepted
+          , burnWithMintRejected
           , oddQuantityRejected
           ]
       , testGroup

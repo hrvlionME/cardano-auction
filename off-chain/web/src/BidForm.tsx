@@ -17,7 +17,7 @@
  * bid that is too low is rejected by the validator whatever this form thinks.
  * Their job is to turn a paid, failed transaction into a disabled button.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { bid as buildBid } from "@core/tx/bid.ts";
 import type { AuctionSummary } from "./api.ts";
 import { toAuctionState } from "./chain.ts";
@@ -34,6 +34,12 @@ export default function BidForm(
   const [amount, setAmount] = useState(String(suggested / 1_000_000));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which attempt is current. signTx settles only when the user answers the
+  // wallet's own window, and nothing obliges that window to be visible -- it
+  // can open behind the browser, and the page then waits with no way to know
+  // why. Cancel bumps this so the abandoned attempt, if it ever does settle,
+  // can no longer touch the form.
+  const attempt = useRef(0);
 
   // Follow the auction when someone else bids, unless the user has typed
   // something of their own that is still high enough to stand.
@@ -51,6 +57,7 @@ export default function BidForm(
   const tooRich = conn !== null && BigInt(Math.max(lovelace, 0)) > conn.balance;
 
   async function place(c: Connected) {
+    const mine = ++attempt.current;
     setBusy(true);
     setError(null);
     try {
@@ -59,12 +66,24 @@ export default function BidForm(
       // the refund with the spent input. All of it the same code path the CLI
       // runs -- see the note above.
       const placed = await buildBid(c.lucid, toAuctionState(auction), BigInt(lovelace));
+      // Reported even after a cancel: if the wallet did sign and submit in the
+      // end, the bid is on its way to the chain and the user should know.
       onDone(placed.txHash);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mine === attempt.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (mine === attempt.current) setBusy(false);
     }
+  }
+
+  function cancel() {
+    attempt.current++;
+    setBusy(false);
+    setError(
+      "Cancelled. Nothing was submitted unless you approved it in your wallet. " +
+        "If nothing seemed to happen, the wallet's signing window may have opened " +
+        "behind the browser -- check for it before trying again.",
+    );
   }
 
   if (!conn) {
@@ -91,8 +110,9 @@ export default function BidForm(
           <span className="unit">₳</span>
         </div>
         <button className="btn primary" onClick={() => place(conn)} disabled={busy || tooLow || tooRich}>
-          {busy ? <><Spinner /> building…</> : "Place bid"}
+          {busy ? <><Spinner /> waiting for your wallet…</> : "Place bid"}
         </button>
+        {busy && <button className="btn" onClick={cancel}>Cancel</button>}
       </div>
       <div className="bidmeta">
         <span>must exceed <strong>{ada(floor)} ₳</strong></span>

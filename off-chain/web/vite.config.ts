@@ -18,7 +18,12 @@ const here = (p: string) => new URL(p, import.meta.url).pathname;
 // page is served by Vite on 5173, so these paths are forwarded rather than
 // fetched cross-origin -- which keeps the browser code identical in
 // development and in production, where one server serves everything.
-const API = "http://localhost:8000";
+//
+// 127.0.0.1 rather than localhost: `localhost` resolves to both ::1 and
+// 127.0.0.1, the Deno server listens on IPv4 only, and Deno's Node-compat
+// socket gives up on the pair instead of falling back ("http proxy error:
+// AggregateError"), so every API call through the dev server returned 500.
+const API = "http://127.0.0.1:8000";
 
 export default defineConfig({
   plugins: [wasm(), react()],

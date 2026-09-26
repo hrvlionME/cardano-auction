@@ -15,7 +15,7 @@
  * not fail at build time. It fails on-chain, as "failed to parse datum", after
  * the user has paid a fee.
  */
-import { Blockfrost, Lucid } from "@lucid-evolution/lucid";
+import { Blockfrost, CML, Lucid } from "@lucid-evolution/lucid";
 import { network } from "@core/config.ts";
 import { setBlueprint } from "@core/blueprint.ts";
 import type { AuctionState, LotState } from "@core/state.ts";
@@ -42,8 +42,61 @@ export const isTestnet = network !== "Mainnet";
  */
 export async function makeBrowserLucid(wallet: WalletApi) {
   const lucid = await Lucid(new Blockfrost(`${location.origin}/chain`, "proxied"), network);
-  lucid.selectWallet.fromAPI(wallet);
+  lucid.selectWallet.fromAPI(onChainOnly(wallet));
   return lucid;
+}
+
+/**
+ * Offer Lucid only the wallet UTxOs that exist, unspent, on the chain.
+ *
+ * CIP-30 lets a wallet answer `getUtxos` however it likes, and Eternl includes
+ * the change outputs of its own *pending* transactions. If one of those never
+ * confirms -- rejected, or dropped from the mempool -- Eternl keeps offering its
+ * output anyway. Lucid spends it, and Eternl's own signer then refuses the
+ * transaction with "Could not resolve transaction input UTxOs", because the
+ * input does not exist. The user sees a signing prompt fail for no reason they
+ * can act on.
+ *
+ * So every UTxO is checked against the chain through our proxy, and any whose
+ * transaction is unknown or whose output is already spent is dropped. This is
+ * the same stance as everywhere else here: the chain is the authority, and
+ * what a wallet or a database merely says is checked against it. The cost is
+ * one request per distinct transaction, and that an output confirmed seconds
+ * ago may be skipped until the index catches up -- conservative, never wrong.
+ */
+function onChainOnly(wallet: WalletApi): WalletApi {
+  const getUtxos = wallet.getUtxos.bind(wallet);
+  return new Proxy(wallet, {
+    get(target, prop, receiver) {
+      if (prop !== "getUtxos") return Reflect.get(target, prop, receiver);
+      return async (...args: Parameters<WalletApi["getUtxos"]>) => {
+        const offered = await getUtxos(...args);
+        if (!offered) return offered;
+        const txs = new Map<string, Promise<{ output_index: number; consumed_by_tx?: string | null }[] | null>>();
+        const outputsOf = (hash: string) => {
+          if (!txs.has(hash)) {
+            txs.set(
+              hash,
+              fetch(`${location.origin}/chain/txs/${hash}/utxos`)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((j) => (j ? j.outputs : null)),
+            );
+          }
+          return txs.get(hash)!;
+        };
+        const kept = await Promise.all(offered.map(async (hex) => {
+          const input = CML.TransactionUnspentOutput.from_cbor_hex(hex).input();
+          const hash = input.transaction_id().to_hex();
+          const index = Number(input.index());
+          const out = (await outputsOf(hash))?.find((o) => o.output_index === index);
+          if (out && !out.consumed_by_tx) return hex;
+          console.warn(`[wallet] ignoring ${hash}#${index}: ${out ? "already spent" : "not on the chain"}`);
+          return null;
+        }));
+        return kept.filter((h): h is string => h !== null);
+      };
+    },
+  });
 }
 
 /**

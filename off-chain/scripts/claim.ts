@@ -4,16 +4,14 @@
  *   deno task claim             # the only lot on disk
  *   deno task claim 1f5c4baf    # ...or any prefix of its policy id
  *
- * The burn needs the seller's signature as well as the holder's, so this is
- * the one transaction here that can carry two. Whoever holds the token drives
- * it; the seller co-signs. When an auction closed with no bids the lot came
- * home to the seller, who is then both parties at once.
+ * Only the holder signs. This script looks through the configured wallets for
+ * whichever one holds the token -- the winner, or the seller when an auction
+ * closed with no bids and the lot came home -- and burns from there.
  */
-import { paymentCredentialOf } from "@lucid-evolution/lucid";
 import { awaitBurned, makeBidderLucid, makeWalletLucid } from "../src/lucid.ts";
 import { claim } from "../src/tx/claim.ts";
 import { loadLot } from "../src/state.ts";
-import { bidderIndices, network, walletSeedPhrase } from "../src/config.ts";
+import { bidderIndices, network } from "../src/config.ts";
 import type { Lucid } from "../src/lucid.ts";
 import { friendlyErrors } from "../src/cli.ts";
 
@@ -60,18 +58,13 @@ console.log(`\nnetwork:  ${network}`);
 console.log(`burning:  ${lot.tokenName} (${lot.unit})`);
 console.log(`holder:   ${holderAddress}`);
 console.log(`          found as ${where}`);
-console.log(`seller:   ${lot.sellerPkh}`);
 console.log(
   isSeller
-    ? `signing:  one key -- the holder is the seller, so both roles are the same person\n`
-    : `signing:  two keys -- the holder redeems, the seller co-signs the handover\n`,
+    ? `signing:  the seller, who got the lot back because nobody bid\n`
+    : `signing:  the winner alone, confirming the item arrived\n`,
 );
 
-const result = await claim(lucid, lot, {
-  // Only needed when they are different people. `walletSeedPhrase` is the
-  // seller's, since the seller is the operator running this demo.
-  sellerSeed: isSeller ? undefined : walletSeedPhrase(),
-});
+const result = await claim(lucid, lot);
 
 console.log("submitted:", result.txHash);
 console.log("waiting for confirmation (this takes a minute or two)...");
@@ -79,7 +72,6 @@ await lucid.awaitTx(result.txHash);
 console.log("\nconfirmed -- the policy accepted the burn\n");
 
 console.log(`  spent token UTxO:  ${result.spent.txHash}#${result.spent.outputIndex}`);
-console.log(`  co-signed:         ${result.coSigned}`);
 
 // The token should now not exist anywhere. Prove it against the asset's total
 // supply rather than against a wallet, whose index lags a fresh burn.
@@ -89,6 +81,6 @@ console.log(`  mint/burn events:  ${supply.events}`);
 
 console.log(
   `\nThe claim is redeemed and the token is gone. The chain now records that\n` +
-    `the seller and the holder both signed off on the handover -- which is the\n` +
-    `most a ledger can say about a physical object.\n`,
+    `the holder confirmed the handover -- which is the most a ledger can say\n` +
+    `about a physical object.\n`,
 );

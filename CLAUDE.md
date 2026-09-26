@@ -34,8 +34,9 @@ branch of both scripts has now been exercised on-chain.
 Done:
 - Auction validator: `NewBid` / `Payout`, hardened against double satisfaction
   by anchoring every obligation to its own input's `TxOutRef`
-- Lot minting policy: one-shot mint, plus a burn branch requiring the seller's
-  signature (burn = the winner claiming the item)
+- Lot minting policy: one-shot mint, plus a burn branch that needs only the
+  holder (burn = the winner confirming the item arrived). It required the
+  seller's signature too until 2026-09-24; see "The burn" below
 - 22 Haskell tests, all passing
 - Off-chain: all five transactions, plus a MariaDB indexer and a read-only HTTP API
 
@@ -53,14 +54,22 @@ Three full runs were completed, all settling to a burned token
                          needed no sweep step
 
 The auction validator hash moved with the datum change, to
-`1a1e968813d2b07b6a5947e39e721d5d3ea961c4050a727c621bcd7e`. The lot policy is
-untouched (`ffeecefb…`), so lots minted before the change still verify.
+`1a1e968813d2b07b6a5947e39e721d5d3ea961c4050a727c621bcd7e`. The lot policy
+changed on 2026-09-24 (`ffeecefb…` → `2b997685…`, the burn rule), so every
+lot minted before that shows DRIFT in `verify-lot` and cannot be burned by the
+current code. That is expected; the auction validator did not move.
 `state/archive/` holds two settled auctions recorded in the old datum format;
 they are history, and `deserialiseParams` cannot read them.
 
-`LAPTOP` (`ae7a1d01…`) is deliberately untouched and still in the seller's
-wallet — kept clean so the thesis demo and its screenshots are not polluted by
-debugging. Break things on a fresh throwaway lot instead.
+**There is no clean thesis LAPTOP right now; mint one fresh before the
+screenshot run.** Two exist and neither will do. `ae7a1d01…` is under the old
+burn rule and cannot be burned by the current code. `1b3f726b…` (minted
+2026-09-24 under the new rule) had its auction open and close with no bids, and
+is sitting closed and unsettled. With several `state/lot-*` files named LAPTOP,
+always pass the policy-id prefix to commands. Break things on a fresh throwaway
+lot instead.
+`BURNTEST` (`76177d5e…`) was the first lot under the new rule: minted and
+burned by its holder alone, burn tx `07809ebc…`.
 
 Wallets, all throwaway, all seeds in `off-chain/.env` (gitignored):
 
@@ -125,9 +134,10 @@ that cannot reach into `off-chain/src/`.
   already lands before the deadline and is correct — and the very slack payout
   requires would break it. Same rounding, opposite consequences.
 - **`txInfoSignatories` comes from the required-signers field, not from who
-  signed.** A transaction the seller genuinely signed, without `addSignerKey`
-  declaring them, shows the burn policy an empty list and fails. `addSignerKey`
-  in `claim.ts` is load-bearing.
+  signed.** A script that checks for a signature sees only keys declared with
+  `addSignerKey`, not every key that witnessed the transaction. This bit the
+  old burn rule; nothing checks signatories now, but any future rule that
+  does will need `addSignerKey`.
 - **`lucid.utxoByUnit()` cannot be trusted for read-back.** It returned a stale
   UTxO right after a confirmation and `undefined` for a token at a script
   address. Use `awaitUtxo()` in `src/lucid.ts`, which polls an address for an
@@ -146,8 +156,8 @@ that cannot reach into `off-chain/src/`.
   address, and a wallet spends from one address at a time.
   The rule to keep: **a `PubKeyHash` says who may authorise; an `Address` says
   where value is delivered.** `LotMintingPolicy.lpSeller` is still a
-  `PubKeyHash` and should stay one — it is checked against `txInfoSignatories`,
-  and signatures are made by keys, not addresses.
+  `PubKeyHash`: it is no longer checked by the script, but it commits the
+  policy id to the seller, and it names a key, not a delivery address.
 - **`utxoByUnit` is not the only stale read.** Any wallet or address query made
   straight after `awaitTx` may be answered from an index that has not caught
   up: `open-auction` once refused a freshly minted lot as "not in your wallet",
@@ -172,7 +182,7 @@ The lifecycle, in order. Each takes a minute or two to confirm:
     deno task bid 7 --as 1           # bidder 1 bids 7 ADA
     deno task bid 9 --as 2           # bidder 2 outbids, refunding bidder 1
     deno task payout                 # after the deadline; waits for the tip
-    deno task claim                  # holder + seller co-sign, burn the token
+    deno task claim                  # the winner burns the token on receipt
 
     deno task sync                   # replay auctions from the chain into MariaDB
     deno task serve --sync           # read-only HTTP API on :8000
@@ -307,11 +317,22 @@ The web app covers **bid, settle and burn**, not just bidding:
   cannot make the transaction do anything the validator would reject. Contrast
   a keeper bot, which would have to hold a key on the server and would break
   the claim that the server can move no funds.
-- **Claim (burn)** is offered only when the connected wallet is both holder and
-  seller, because the burn needs both signatures on one transaction. When it is
-  two people the interface says so plainly and points at the CLI. That boundary
-  is a finding worth writing up: the contract is one click when one party, and
-  needs a protocol when two.
+- **Claim (burn)** is offered to whoever holds the token (the winner, or the
+  seller when nobody bid), and hidden for everyone once the chain reports the
+  token burned.
+
+### The burn (changed 2026-09-24)
+
+The burn used to require the seller's signature as well as the holder's, as a
+two-party handshake. Building it in the browser showed the cost: a wallet signs
+only for itself, so a two-person burn needs an off-chain relay (a co-sign flow
+was built and then removed). Worse, co-signing exposed the seller. A crafted
+"burn" that also swept 9 ADA from the seller built and evaluated fine, because
+the policy only checked for the signature, and only an off-chain check stopped
+it. The rule was dropped: a burn now needs only the holder, which the ledger
+already enforces. The receipt comes from the buyer, the party with a reason to
+deny it, which makes it the stronger one. Worth a subsection in the thesis as a
+design iteration backed by evidence.
 
 Both reuse the CLI's `payout()` and `claim()` unchanged. Two shared pieces had
 to become runtime-neutral for that: `chainApiBase()` in `config.ts` (the CLI

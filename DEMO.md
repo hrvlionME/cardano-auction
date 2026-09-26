@@ -17,16 +17,17 @@ Check the wallets are funded and the two halves still agree:
     cd off-chain && deno task verify-lot
 
 `verify-lot` re-derives each minted token's policy id from the current code and
-compares it to the id the token was actually minted under. If it reports DRIFT,
-the Haskell has changed since those tokens were minted and every address the
-code computes is wrong — stop and rebuild (`cd on-chain && make blueprint`)
-before demonstrating anything.
+compares it to the id the token was actually minted under. **The lot you are
+about to demonstrate must say OK.** DRIFT on lots minted before the burn rule
+changed (2026-09-24) is expected: they keep the old rules and the current code
+cannot burn them. DRIFT on a lot minted *after* that means `plutus.json` is
+stale, so run `cd on-chain && make blueprint` before demonstrating anything.
 
 Three parties are configured, all seeds in `off-chain/.env` (gitignored):
 
 | role | env var | plays |
 |---|---|---|
-| seller / operator | `WALLET_SEED_PHRASE` | mints the lot, opens the auction, co-signs the burn |
+| seller / operator | `WALLET_SEED_PHRASE` | mints the lot, opens the auction, settles it |
 | bidder 1 | `BIDDER1_SEED_PHRASE` | bids, gets outbid, gets refunded |
 | bidder 2 | `BIDDER2_SEED_PHRASE` | outbids, wins, burns the token |
 
@@ -80,7 +81,7 @@ than shown as addresses.
     deno task bid 9 --as 2 <prefix>         # bidder 2 outbids
                                             # ... wait for the deadline ...
     deno task payout <prefix>               # seller paid, lot delivered
-    deno task claim <prefix>                # two signatures, token burned
+    deno task claim <prefix>                # winner burns the token
 
 `<prefix>` is any prefix of the policy id that `mint-lot` printed — eight
 characters is plenty. It is only needed because several lots are on disk.
@@ -116,10 +117,11 @@ is the double-satisfaction defence working as designed.
 for the *chain tip* to reach the deadline, not merely the wall clock; see
 Troubleshooting.
 
-**`claim`** — the burn. Two signatures: the holder's, because spending the
-token needs their key, and the seller's, because the policy demands it. The
-burn is therefore a two-party receipt — on-chain evidence that both sides were
-present for the handover. `claim` finishes by reporting `total supply now: 0`
+**`claim`** — the burn: the winner confirming the item arrived. One signature,
+the holder's, and the policy asks for nothing more, because spending the
+token already needs the holder's key. A receipt is worth most from the side
+with a reason to deny it: the seller would always say "delivered", while the
+buyer saying "received" is what settles a dispute. `claim` finishes by reporting `total supply now: 0`
 and `mint/burn events: 2`. The coupon existed exactly once and was redeemed
 exactly once.
 
@@ -332,12 +334,17 @@ whoever presses it still cannot make the transaction do anything the validator
 would reject; they only pay the fee. With no bids the same button returns the
 lot to the seller.
 
-After settlement, **Claim item (burn token)** appears only when the connected
-wallet is both the holder and the seller, since the burn needs both
-signatures on one transaction. When the winner is someone else, the page says
-so and points to `deno task claim`. That is a finding worth saying out loud: a
-one-party burn is one click, and a two-party burn needs a protocol between two
-people, which a button cannot supply.
+After settlement, **Claim item (burn token)** appears for whoever holds the
+token: the winner, or the seller when nobody bid. One click, one signature.
+Once the token is burned, the page says so for everyone, having asked the chain
+rather than the database.
+
+Worth telling as a design story: the burn first needed the seller's signature
+too. Building the web page showed that a two-person signature needs an
+off-chain relay, and that co-signing let a crafted "burn" spend the seller's
+funds, which the policy accepted because it only checked the signature. So the
+co-signature was dropped. The evidence is in `LotMintingPolicy.hs` and its
+tests.
 
 ---
 
@@ -346,11 +353,11 @@ people, which a button cannot supply.
 Be precise about the boundary; it is the sort of thing an examiner will push on.
 
 **The chain guarantees** that the money moved, that a displaced bidder was
-refunded in the same transaction, that the lot is unique, and that both parties
-signed off on the handover.
+refunded in the same transaction, that the lot is unique, and that the winner
+confirmed the handover.
 
 **The chain cannot guarantee** that a laptop exists, or that it was handed
-over. The burn records that both parties *said* it was. The seller is the app
+over. The burn records that the winner *said* it was. The seller is the app
 operator, so users trust the operator for physical delivery and the chain for
 the money — never the other way round.
 
@@ -442,9 +449,11 @@ to a different policy.
 
 ## Rehearse, and record a fallback
 
-Rehearse the whole of Part B once on a throwaway lot — `DEMOLOT`, never
-`LAPTOP`. `LAPTOP` (`ae7a1d01…`) is deliberately kept clean and unspent so the
-run you screenshot for the thesis is not polluted by debugging.
+Rehearse the whole of Part B once on a throwaway lot — `DEMOLOT`, never the
+thesis lot. Mint the thesis `LAPTOP` fresh under the current code, shortly
+before the run you screenshot, so its history holds nothing but that run.
+`CLAUDE.md` records which LAPTOP is current. Two older ones exist: `ae7a1d01…`
+under the old burn rule, and `1b3f726b…`, whose auction closed with no bids.
 
 Twenty minutes of live blockchain in front of an examiner is a real risk.
 Record a rehearsal, typing the Part B commands inside it:

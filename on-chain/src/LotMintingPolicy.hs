@@ -14,11 +14,19 @@
 --
 -- Burning closes the lifecycle: mint -> auction -> deliver -> burn. The lot
 -- token is a bearer claim on the physical item, and burning it is the winner
--- redeeming that claim. The burn requires the seller's signature as well as
--- the holder's (spending the token needs the holder's key regardless), so a
--- burn is a two-party receipt: it can only happen if both sides were present.
--- Without a burn path the coupon would live forever, and nothing on-chain
--- would distinguish a claim already redeemed from one still outstanding.
+-- redeeming that claim: the holder's confirmation that the item arrived. This
+-- policy adds no signature requirement to a burn, because the ledger already
+-- provides the one that matters -- burning means spending the UTxO that holds
+-- the token, and only its owner can do that. Without a burn path the coupon
+-- would live forever, and nothing on-chain would distinguish a claim already
+-- redeemed from one still outstanding.
+--
+-- An earlier version also required the seller's signature, making the burn a
+-- two-party handshake. It was dropped: a browser wallet signs only for itself,
+-- so a second signature needs an off-chain relay between two people, and
+-- co-signing exposes the seller -- a "burn" that also spent one of the
+-- seller's UTxOs satisfied that policy just as well, since it only asked for
+-- the signature.
 module LotMintingPolicy where
 
 import GHC.Generics (Generic)
@@ -42,8 +50,10 @@ data LotParams = LotParams
   , lpTokenName :: TokenName
   -- ^ Name of the lot token, e.g. "LAPTOP".
   , lpSeller    :: PubKeyHash
-  -- ^ Must sign any burn. The burn is the delivery receipt, so it takes both
-  -- this signature and the holder's.
+  -- ^ Who minted the lot. No longer checked by the script, but still part of
+  -- its parameters, so the policy id commits to the seller: anyone can
+  -- recompute it from these three values and confirm who the lot belongs to.
+  -- Keeping it also keeps the parameter encoding every off-chain tool uses.
   }
   deriving stock (Generic)
   deriving anyclass (HasBlueprintDefinition)
@@ -74,15 +84,6 @@ lotTypedPolicy params (ScriptContext txInfo _ scriptInfo) = touchesExactlyTheLot
             (txInfoInputs txInfo)
         )
 
-    -- Burning is the winner redeeming the claim. Requiring the seller's
-    -- signature makes it a handshake rather than a unilateral act, so the burn
-    -- stands as evidence that the handover took place.
-    sellerSigned :: Bool
-    sellerSigned =
-      PlutusTx.traceIfFalse
-        "Burning the lot requires the seller's signature"
-        (List.any (PlutusTx.== lpSeller params) (txInfoSignatories txInfo))
-
     -- Exactly one token name under this policy, in quantity 1 (mint) or -1
     -- (burn). Checking the whole map rather than a single lookup also rules
     -- out minting extra token names alongside the lot.
@@ -106,7 +107,10 @@ lotTypedPolicy params (ScriptContext txInfo _ scriptInfo) = touchesExactlyTheLot
         then consumesSeed
         else
           if q PlutusTx.== -1
-            then sellerSigned
+            -- A burn needs nothing from this script. The token is in the
+            -- transaction's inputs, so its owner has already signed: the
+            -- ledger checks that before any script runs.
+            then True
             else PlutusTx.traceError "Lot quantity must be exactly 1 (mint) or -1 (burn)"
 
 {-# INLINEABLE lotUntypedPolicy #-}
