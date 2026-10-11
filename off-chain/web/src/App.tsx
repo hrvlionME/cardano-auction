@@ -69,7 +69,7 @@ export default function App() {
           <Notice kind="ok">
             Account created — your wallet signature was the only credential needed, so there is no
             password to remember or lose.{" "}
-            <NavLink to="/account" onClick={clearIsNew}>Add a name and delivery details</NavLink>,
+            <NavLink to="/account/profile" onClick={clearIsNew}>Add a name and delivery details</NavLink>,
             or <button className="inline" onClick={clearIsNew}>skip it</button>. All of it is
             optional, and none of it goes on the chain.
           </Notice>
