@@ -25,9 +25,9 @@ function Header() {
 
   return (
     <header>
-      <NavLink className="brand" to="/" aria-label="Auction house home">
+      <NavLink className="brand" to="/" aria-label="Auction home">
         <span className="mark" aria-hidden="true">₳</span>
-        <span className="wordmark">Auction<span>house</span></span>
+        <span className="wordmark">Auction</span>
       </NavLink>
 
       <nav aria-label="Main navigation">
